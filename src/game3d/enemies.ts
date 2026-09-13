@@ -1,11 +1,46 @@
 // ---------- 3D enemies: Flaxan drones, seekers, raptors, gunships, bombers,
-// siege mechs + Viltrumite warlord. Wreck physics on death.
+// siege mechs + Viltrumite warlords (3 distinct boss fights). Wreck physics on death.
 import * as THREE from "three";
-import { Rig, POSES, BOSS_PAL } from "./character";
+import { Rig, POSES, type Palette, type Pose } from "./character";
 import type { FX } from "./fx";
 import type { City } from "./city";
 
 export type EKind = "drone" | "seeker" | "raptor" | "gunship" | "bomber" | "mech" | "boss";
+export type BossClass = "brute" | "blade" | "commander";
+
+/** the three warlords — rotate every 5th wave, escalating */
+export const BOSS_TYPES: {
+  cls: BossClass; name: string; title: string; pal: Palette; scale: number;
+  hpMult: number; spdMult: number; dmgMult: number; color: number;
+}[] = [
+  {
+    cls: "brute", name: "KURGAN", title: "THE SLEDGE", scale: 1.55, hpMult: 1.25, spdMult: 0.92, dmgMult: 1.15,
+    color: 0xff4757,
+    pal: {
+      suit: 0x3a3f52, suitDark: 0x1d2130, accent: 0xff4757, accentDark: 0x991b28,
+      skin: 0xd8987a, eye: 0xff3326, hair: 0x2a2d3a, cape: 0xb01224, capeInner: 0x58060f,
+      masked: false, emblem: "viltrum",
+    },
+  },
+  {
+    cls: "blade", name: "THRAXA", title: "THE BLADE", scale: 1.12, hpMult: 0.8, spdMult: 1.5, dmgMult: 0.9,
+    color: 0xc06bff,
+    pal: {
+      suit: 0x51244d, suitDark: 0x2a1030, accent: 0xc06bff, accentDark: 0x6a2f96,
+      skin: 0xead0b8, eye: 0xff7ae0, hair: 0xe8e8f4, cape: 0x7a2fbe, capeInner: 0x3a1060,
+      masked: false, emblem: "viltrum",
+    },
+  },
+  {
+    cls: "commander", name: "CONQUEST", title: "THE WARLORD", scale: 1.4, hpMult: 1.1, spdMult: 1.0, dmgMult: 1.0,
+    color: 0xffb054,
+    pal: {
+      suit: 0x1d2130, suitDark: 0x0d0f1a, accent: 0xffb054, accentDark: 0xb06a14,
+      skin: 0xcf9a72, eye: 0xffd23f, hair: 0xd8d8e0, cape: 0xc99414, capeInner: 0x6a4a08,
+      mustache: true, masked: false, emblem: "viltrum",
+    },
+  },
+];
 
 export interface Enemy {
   kind: EKind;
@@ -37,6 +72,12 @@ export interface Enemy {
   // bomber target
   targetBuilding: { x: number; z: number; top: number } | null;
   doors: THREE.Object3D[];
+  // warlord profile
+  bossClass?: BossClass;
+  bossName?: string;
+  combo: number;         // multi-hit chain counter
+  dashN: number;         // remaining dashes in a blade chain
+  tele: { x: number; z: number; t: number; fired: boolean } | null; // judgement telegraph
 }
 
 export interface EnemyCtx {
@@ -53,6 +94,9 @@ export interface EnemyCtx {
   slamBlast: (at: THREE.Vector3, radius: number, dmg: number) => void;
   dropBomb: (from: THREE.Vector3, vel: THREE.Vector3) => void;
   sfx: (name: string, power?: number) => void;
+  spawnMinion: (pos: THREE.Vector3) => void;
+  judgement: (x: number, z: number, delay: number) => void; // telegraph a ground strike
+  blastAt: (x: number, z: number, radius: number, dmg: number) => void; // detonate ground strike
 }
 
 const _v1 = new THREE.Vector3();
@@ -605,7 +649,7 @@ export class Enemies {
 
   constructor(private scene: THREE.Scene) {}
 
-  spawn(kind: EKind, pos: THREE.Vector3, hpMult: number): Enemy {
+  spawn(kind: EKind, pos: THREE.Vector3, hpMult: number, bossIdx = 0): Enemy {
     let obj: THREE.Group;
     let core: THREE.Mesh | null = null;
     let rotors: THREE.Mesh[] = [];
@@ -613,6 +657,7 @@ export class Enemies {
     let doors: THREE.Object3D[] = [];
     let hp = 20;
     let r = 1.8;
+    let bossType: (typeof BOSS_TYPES)[number] | null = null;
 
     if (kind === "drone") {
       const m = buildDrone();
@@ -639,11 +684,13 @@ export class Enemies {
       obj = m.obj; core = m.core; rotors = m.spin;
       hp = 260 * hpMult; r = 2.8;
     } else {
-      rig = new Rig(BOSS_PAL, 1.35);
+      const bt = BOSS_TYPES[Math.abs(bossIdx ?? 0) % BOSS_TYPES.length];
+      rig = new Rig(bt.pal, bt.scale);
       obj = new THREE.Group();
       obj.add(rig.group);
-      hp = 900 * (0.65 + hpMult * 0.45);
-      r = 2.3;
+      hp = 900 * bt.hpMult * (0.65 + hpMult * 0.45);
+      r = 2.3 * bt.scale;
+      bossType = bt;
     }
 
     // materials are shared templates — clone per instance so hit-flash is local
@@ -686,7 +733,12 @@ export class Enemies {
       glowMats,
       targetBuilding: null,
       doors,
+      combo: 0, dashN: 0, tele: null,
     };
+    if (bossType) {
+      e.bossClass = bossType.cls;
+      e.bossName = bossType.name;
+    }
     if (kind === "raptor") e.state = "lineup";
     if (kind === "bomber") e.state = "cruise";
     if (kind === "mech") e.state = "advance";
@@ -1238,30 +1290,62 @@ export class Enemies {
     }
   }
 
+  /* ================= warlord AI — three distinct boss fights ================= */
+
   private updateBoss(e: Enemy, ctx: EnemyCtx, dist: number, toHero: THREE.Vector3): void {
+    switch (e.bossClass) {
+      case "blade": this.updateBlade(e, ctx, dist, toHero); return;
+      case "commander": this.updateCommander(e, ctx, dist, toHero); return;
+      default: this.updateBrute(e, ctx, dist, toHero); return;
+    }
+  }
+
+  /** shared warlord finishing touches: facing, pitch, cape, aura */
+  private bossFinish(e: Enemy, ctx: EnemyCtx, toHero: THREE.Vector3, pitchTarget: number, enraged: boolean, color: number, poseBlend: number, pose: Pose): void {
     const { dt } = ctx;
     const rig = e.rig!;
-    const enraged = e.hp < e.maxHp * 0.32;
-    const spdM = enraged ? 1.35 : 1;
+    const faceDir = e.state === "dashpunch" || e.state === "slash" ? _v3.copy(e.v).normalize() : toHero;
+    const yaw = Math.atan2(faceDir.x, faceDir.z);
+    e.obj.rotation.y = lerpAngle(e.obj.rotation.y, yaw, Math.min(1, dt * 8));
+    rig.body.rotation.x += (pitchTarget - rig.body.rotation.x) * Math.min(1, dt * 6);
+    rig.blendPose(pose, Math.min(1, dt * poseBlend));
+    rig.addFlutter(ctx.time, Math.min(1, e.v.length() * 0.02));
+    rig.updateCape(dt, e.v.length(), ctx.time);
+    rig.setAura(enraged, color, enraged ? 0.26 + Math.sin(ctx.time * 8) * 0.07 : 0);
+    if (enraged && Math.random() < dt * 26) {
+      const p = e.obj.position;
+      ctx.fx.spark(p.x + (Math.random() - 0.5) * 3, p.y + 1 + (Math.random() - 0.5) * 3, p.z + (Math.random() - 0.5) * 3,
+        color, 1, 4, 0.4, 0.5, 4, 1);
+    }
+  }
+
+  /* ---------- KURGAN THE SLEDGE — brute: relentless melee pressure ---------- */
+  private updateBrute(e: Enemy, ctx: EnemyCtx, dist: number, toHero: THREE.Vector3): void {
+    const { dt } = ctx;
+    const rig = e.rig!;
+    const enraged = e.hp < e.maxHp * 0.38;
+    const spdM = (enraged ? 1.3 : 1) * 0.92;
     e.stateT += dt;
 
     let pose = POSES.fly;
     let blendK = 6;
+    let pitch = Math.min(1.15, Math.hypot(e.v.x, e.v.z) * 0.022);
 
     switch (e.state) {
       case "chase": {
-        _v2.copy(toHero).multiplyScalar(58 * spdM * dt);
+        _v2.copy(toHero).multiplyScalar(62 * spdM * dt);
         e.v.add(_v2);
         e.v.y += ((ctx.hero.y + 3) - e.obj.position.y) * 1.1 * dt;
         e.v.multiplyScalar(Math.exp(-1.7 * dt));
-        const cap = 42 * spdM;
+        const cap = 46 * spdM;
         if (e.v.length() > cap) e.v.setLength(cap);
         pose = e.v.length() > 16 ? POSES.fist : POSES.hover;
-        if (e.stateT > 2.2 / spdM) {
+        // aggressive from ANY range — closes fast, roars in
+        if (e.stateT > 1.9 / spdM) {
           e.stateT = 0;
           const roll = Math.random();
-          if (dist < 46 && roll < 0.5) { e.state = "aim"; ctx.sfx("warn", 0.5); }
-          else if (roll < 0.78) { e.state = "volley"; e.fireT = 0.25; }
+          if (dist < 42 && roll < 0.58) { e.state = "aim"; e.combo = enraged ? 2 : 1; ctx.sfx("warn", 0.55); }
+          else if (roll < 0.8) { e.state = "volley"; e.fireT = 0.25; }
           else { e.state = "risehigh"; }
         }
         break;
@@ -1271,11 +1355,11 @@ export class Enemies {
         pose = POSES.slamUp;
         blendK = 11;
         rig.setEyeGlow(0xff3326, 3.4);
-        if (e.stateT > 0.55 / spdM) {
+        if (e.stateT > 0.5 / spdM) {
           e.state = "dashpunch";
           e.stateT = 0;
-          e.v.copy(toHero).multiplyScalar(118 * spdM);
-          ctx.sfx("dash", 0.9);
+          e.v.copy(toHero).multiplyScalar(124 * spdM);
+          ctx.sfx("dash", 0.95);
           ctx.fx.ring(e.obj.position.x, e.obj.position.y, e.obj.position.z, 0xff4757, 16, 0.45, false, 1.5);
         }
         break;
@@ -1283,15 +1367,25 @@ export class Enemies {
       case "dashpunch": {
         pose = POSES.fist;
         blendK = 14;
+        pitch = 1.15;
         const p = e.obj.position;
         ctx.fx.jet(p.x, p.y, p.z, -e.v.x * 0.02, -e.v.y * 0.02, -e.v.z * 0.02, 0xff6a5a, 4, 14, 0.8, 0.4, 0.3);
         ctx.city.smashThrough(p, 4, ctx.fx, 20);
-        if (dist < 4.2) {
+        if (dist < 4.6) {
           ctx.hitPlayer(24, p);
           ctx.shake(9);
           ctx.fx.flash(p.x, p.y, p.z, 0xffd0a0, 5, 0.2);
-          e.state = "recover"; e.stateT = 0;
-          e.v.multiplyScalar(0.15);
+          ctx.sfx("punch", 1.1);
+          // combo: chained rush punches instead of a single hit
+          if (e.combo > 0) {
+            e.combo--;
+            e.stateT = 0;
+            e.v.multiplyScalar(-0.25);
+            e.v.addScaledVector(toHero, 60);
+          } else {
+            e.state = "recover"; e.stateT = 0;
+            e.v.multiplyScalar(0.15);
+          }
         }
         if (e.stateT > 0.6) { e.state = "recover"; e.stateT = 0; e.v.multiplyScalar(0.25); }
         break;
@@ -1300,59 +1394,60 @@ export class Enemies {
         e.v.multiplyScalar(Math.exp(-3 * dt));
         pose = POSES.hover;
         rig.setEyeGlow(enraged ? 0xff3326 : 0xffe27a, enraged ? 2.6 : 1.4);
-        if (e.stateT > 0.75 / spdM) { e.state = "chase"; e.stateT = 0; }
+        if (e.stateT > 0.7 / spdM) { e.state = "chase"; e.stateT = 0; }
         break;
       }
       case "volley": {
+        // rips chunks of the city and hurls them
         pose = POSES.blast;
         blendK = 9;
-        _v2.copy(toHero).multiplyScalar((dist - 44) * 0.85 * dt);
+        _v2.copy(toHero).multiplyScalar((dist - 30) * 0.85 * dt);
         e.v.add(_v2);
         e.v.multiplyScalar(Math.exp(-2.2 * dt));
         e.fireT -= dt;
         if (e.fireT <= 0) {
-          e.fireT = 0.5 / spdM;
+          e.fireT = 0.65 / spdM;
           const hand = e.obj.position.clone();
           hand.y += 1.4;
           hand.addScaledVector(toHero, 1.6);
+          ctx.sfx("grapple", 0.8);
           for (let s = -1; s <= 1; s++) {
             _v2.copy(toHero);
-            const ang = s * 0.1;
+            const ang = s * 0.12;
             const cs = Math.cos(ang), sn = Math.sin(ang);
-            const nx = _v2.x * cs - _v2.z * sn;
-            const nz = _v2.x * sn + _v2.z * cs;
-            _v2.set(nx, _v2.y, nz).normalize();
-            ctx.shoot(hand, _v2, 104, 11, 0xff4757, 0.55);
+            _v2.set(_v2.x * cs - _v2.z * sn, _v2.y + 0.06, _v2.x * sn + _v2.z * cs).normalize();
+            ctx.shoot(hand, _v2, 88, 12, 0xff8a5a, 1.1);
           }
+          ctx.fx.chunk(hand.x, hand.y, hand.z, 0xb9b2a6, 6, 10, 0.9, 1.2);
           ctx.fx.flash(hand.x, hand.y, hand.z, 0xff6a5a, 2.4, 0.14);
-          ctx.sfx("zap", 0.7);
-          if (e.stateT > (enraged ? 3.6 : 2.7)) { e.state = "chase"; e.stateT = 0; }
+          if (e.stateT > (enraged ? 3.4 : 2.6)) { e.state = "chase"; e.stateT = 0; }
         }
         break;
       }
       case "risehigh": {
         pose = POSES.fly;
-        e.v.y += 60 * dt;
+        e.v.y += 66 * dt;
         e.v.x *= Math.exp(-2 * dt);
         e.v.z *= Math.exp(-2 * dt);
         if (e.obj.position.y > ctx.hero.y + 34 || e.stateT > 1.5) {
           e.state = "groundslam";
           e.stateT = 0;
-          e.v.set(0, -150 * spdM, 0);
-          e.obj.position.x += (ctx.hero.x - e.obj.position.x) * 0.6;
-          e.obj.position.z += (ctx.hero.z - e.obj.position.z) * 0.6;
-          ctx.sfx("warn", 0.8);
+          e.v.set(0, -160 * spdM, 0);
+          e.obj.position.x += (ctx.hero.x - e.obj.position.x) * 0.7;
+          e.obj.position.z += (ctx.hero.z - e.obj.position.z) * 0.7;
+          ctx.sfx("warn", 0.85);
         }
         break;
       }
       case "groundslam": {
         pose = POSES.slamDown;
         blendK = 13;
+        pitch = 0.22;
         const surf = ctx.city.surfaceY(e.obj.position.x, e.obj.position.z);
         if (e.obj.position.y <= surf + 3 || e.stateT > 2.4) {
           const p = e.obj.position.clone();
           p.y = surf + 1;
-          ctx.slamBlast(p, 46, 34);
+          ctx.slamBlast(p, 50, 36);
           ctx.sfx("slam", 1);
           ctx.shake(16);
           e.v.set(0, 12, 0);
@@ -1363,25 +1458,242 @@ export class Enemies {
       }
     }
 
-    const faceDir = e.state === "dashpunch" ? _v2.copy(e.v).normalize() : toHero;
-    const yaw = Math.atan2(faceDir.x, faceDir.z);
-    e.obj.rotation.y = lerpAngle(e.obj.rotation.y, yaw, Math.min(1, dt * 8));
+    this.bossFinish(e, ctx, toHero, pitch, enraged, 0xff3326, blendK, pose);
+  }
 
-    const flat = Math.hypot(e.v.x, e.v.z);
-    const pitch = e.state === "groundslam" ? 0.22
-      : e.state === "dashpunch" ? 1.15
-        : Math.min(1.15, flat * 0.022);
-    rig.body.rotation.x += (pitch - rig.body.rotation.x) * Math.min(1, dt * 6);
+  /* ---------- THRAXA THE BLADE — fencer: orbit, blink-slash chains, fans ---------- */
+  private updateBlade(e: Enemy, ctx: EnemyCtx, dist: number, toHero: THREE.Vector3): void {
+    const { dt } = ctx;
+    const rig = e.rig!;
+    const enraged = e.hp < e.maxHp * 0.4;
+    const spdM = (enraged ? 1.25 : 1) * 1.5;
+    e.stateT += dt;
 
-    rig.blendPose(pose, Math.min(1, dt * blendK));
-    rig.addFlutter(ctx.time, Math.min(1, flat * 0.02));
-    rig.updateCape(dt, e.v.length(), ctx.time);
-    rig.setAura(enraged, 0xff3326, enraged ? 0.26 + Math.sin(ctx.time * 8) * 0.07 : 0);
-    if (enraged && Math.random() < dt * 26) {
-      const p = e.obj.position;
-      ctx.fx.spark(p.x + (Math.random() - 0.5) * 3, p.y + 1 + (Math.random() - 0.5) * 3, p.z + (Math.random() - 0.5) * 3,
-        0xff3326, 1, 4, 0.4, 0.5, 4, 1);
+    let pose = POSES.hover;
+    let blendK = 8;
+    let pitch = Math.min(0.9, Math.hypot(e.v.x, e.v.z) * 0.016);
+
+    switch (e.state) {
+      case "chase": {
+        // orbit-strafe at ~26m — a fencer measuring distance
+        const want = 26;
+        const radial = (dist - want) * 2.6;
+        _v2.copy(toHero).multiplyScalar(dist > 0.1 ? radial / dist : 0);
+        // tangential swirl
+        _v3.set(-toHero.z, 0, toHero.x).normalize().multiplyScalar(34 * e.strafe);
+        _v2.add(_v3);
+        _v2.y += ((ctx.hero.y + 2) - e.obj.position.y) * 1.6;
+        e.v.lerp(_v2, Math.min(1, dt * 2.4));
+        const cap = 52 * spdM * 0.8;
+        if (e.v.length() > cap) e.v.setLength(cap);
+        if (e.stateT > 1.6 / spdM) {
+          e.stateT = 0;
+          const roll = Math.random();
+          if (roll < (enraged ? 0.62 : 0.5)) {
+            e.state = "windup";
+            e.dashN = enraged ? 4 : 3;
+            ctx.sfx("warn", 0.6);
+            rig.setEyeGlow(0xff7ae0, 3.2);
+          } else if (roll < 0.85) {
+            e.state = "fan";
+            e.fireT = 0.2;
+          } else {
+            e.strafe *= -1; // reverse the orbit
+          }
+        }
+        break;
+      }
+      case "windup": {
+        // hover-flash telegraph: she dims, glows violet, then vanishes
+        e.v.multiplyScalar(Math.exp(-4 * dt));
+        pose = POSES.fist;
+        if (Math.random() < dt * 40) {
+          const p = e.obj.position;
+          ctx.fx.spark(p.x, p.y, p.z, 0xc06bff, 2, 6, 0.5, 0.4, 0, 1);
+        }
+        if (e.stateT > 0.42 / spdM) {
+          e.state = "slash";
+          e.stateT = 0;
+          e.v.copy(toHero).multiplyScalar(150 * spdM);
+          ctx.sfx("dash", 1);
+          const p = e.obj.position;
+          ctx.fx.ring(p.x, p.y, p.z, 0xc06bff, 14, 0.4, false, 1.6);
+        }
+        break;
+      }
+      case "slash": {
+        pose = POSES.fist;
+        blendK = 15;
+        pitch = 1.05;
+        const p = e.obj.position;
+        // violet afterimage corridor
+        ctx.fx.jet(p.x, p.y, p.z, -e.v.x * 0.02, -e.v.y * 0.02, -e.v.z * 0.02, 0xc06bff, 5, 16, 0.7, 0.5, 0.35);
+        ctx.city.smashThrough(p, 3, ctx.fx, 16);
+        if (dist < 6) {
+          ctx.hitPlayer(16, p);
+          ctx.shake(7);
+          ctx.fx.flash(p.x, p.y, p.z, 0xe0b0ff, 4.4, 0.16);
+          ctx.sfx("clang", 0.9);
+        }
+        if (e.stateT > 0.38) {
+          e.dashN--;
+          if (e.dashN > 0) {
+            // re-aim the next slash
+            e.stateT = 0;
+            e.v.multiplyScalar(-0.3);
+            e.v.addScaledVector(toHero, 140 * spdM * 0.8);
+            e.v.y += (ctx.hero.y + 1 - e.obj.position.y) * 2;
+          } else {
+            e.state = "recover";
+            e.stateT = 0;
+            e.v.multiplyScalar(0.2);
+          }
+        }
+        break;
+      }
+      case "recover": {
+        e.v.multiplyScalar(Math.exp(-2.6 * dt));
+        pose = POSES.hover;
+        rig.setEyeGlow(enraged ? 0xff7ae0 : 0xffc4f0, enraged ? 2.4 : 1.2);
+        if (e.stateT > 0.55 / spdM) { e.state = "chase"; e.stateT = 0; }
+        break;
+      }
+      case "fan": {
+        pose = POSES.blast;
+        blendK = 9;
+        e.v.multiplyScalar(Math.exp(-3 * dt));
+        e.fireT -= dt;
+        if (e.fireT <= 0) {
+          e.fireT = 0.7 / spdM;
+          const hand = e.obj.position.clone();
+          hand.addScaledVector(toHero, 1.4);
+          // razor fan: 8 blades in a spread
+          for (let s = 0; s < 8; s++) {
+            const ang = (s / 8 - 0.5) * (enraged ? 1.5 : 1.1);
+            _v2.copy(toHero);
+            const cs = Math.cos(ang), sn = Math.sin(ang);
+            _v2.set(_v2.x * cs - _v2.z * sn, _v2.y + (Math.random() - 0.5) * 0.12, _v2.x * sn + _v2.z * cs).normalize();
+            ctx.shoot(hand, _v2, 96, 8, 0xc06bff, 0.5);
+          }
+          ctx.sfx("zap", 0.8);
+          ctx.fx.flash(hand.x, hand.y, hand.z, 0xc06bff, 2.6, 0.15);
+          if (e.stateT > 2) { e.state = "chase"; e.stateT = 0; }
+        }
+        break;
+      }
     }
+
+    this.bossFinish(e, ctx, toHero, pitch, enraged, 0xc06bff, blendK, pose);
+  }
+
+  /* ---------- CONQUEST THE WARLORD — commander: ranged pressure + summons + judgement ---------- */
+  private updateCommander(e: Enemy, ctx: EnemyCtx, dist: number, toHero: THREE.Vector3): void {
+    const { dt } = ctx;
+    const rig = e.rig!;
+    const enraged = e.hp < e.maxHp * 0.42;
+    const spdM = enraged ? 1.3 : 1;
+    e.stateT += dt;
+
+    let pose = POSES.hover;
+    let blendK = 7;
+    let pitch = Math.min(0.7, Math.hypot(e.v.x, e.v.z) * 0.012);
+
+    switch (e.state) {
+      case "chase": {
+        // commands from a distance — holds 48..64m, repositions calmly
+        const want = 54;
+        const radial = (dist - want) * 2.2;
+        _v2.copy(toHero).multiplyScalar(dist > 0.1 ? radial / dist : 0);
+        _v3.set(-toHero.z, 0, toHero.x).normalize().multiplyScalar(16 * e.strafe);
+        _v2.add(_v3);
+        _v2.y += ((ctx.hero.y + 6) - e.obj.position.y) * 1.1;
+        e.v.lerp(_v2, Math.min(1, dt * 1.8));
+        if (e.v.length() > 40 * spdM) e.v.setLength(40 * spdM);
+        if (e.stateT > 1.6 / spdM) {
+          e.stateT = 0;
+          const roll = Math.random();
+          if (roll < 0.4) { e.state = "beamburst"; e.fireT = 0.2; ctx.sfx("charge", 0.9); }
+          else if (roll < 0.68) { e.state = "summon"; ctx.sfx("summon", 1); }
+          else if (roll < 0.9 || enraged) { e.state = "judging"; e.stateT = 0; }
+          else e.strafe *= -1;
+        }
+        break;
+      }
+      case "beamburst": {
+        pose = POSES.blast;
+        blendK = 10;
+        e.v.multiplyScalar(Math.exp(-2.4 * dt));
+        rig.setEyeGlow(0xffd23f, 3.4);
+        e.fireT -= dt;
+        if (e.fireT <= 0) {
+          e.fireT = 0.16 / spdM;
+          const hand = e.obj.position.clone();
+          hand.y += 1.2;
+          hand.addScaledVector(toHero, 1.8);
+          _v2.copy(toHero).normalize();
+          _v2.x += (Math.random() - 0.5) * 0.08;
+          _v2.y += (Math.random() - 0.5) * 0.06;
+          ctx.shoot(hand, _v2.normalize(), 128, 9, 0xffb054, 0.6);
+          ctx.sfx("beam", 0.6);
+          ctx.fx.flash(hand.x, hand.y, hand.z, 0xffb054, 1.8, 0.1);
+          if (e.stateT > (enraged ? 3 : 2.2)) { e.state = "chase"; e.stateT = 0; }
+        }
+        break;
+      }
+      case "summon": {
+        pose = POSES.slamUp;
+        blendK = 9;
+        e.v.multiplyScalar(Math.exp(-3 * dt));
+        if (e.stateT > 0.6 && e.combo === 0) {
+          e.combo = 1; // one-shot guard
+          for (let i = 0; i < (enraged ? 4 : 3); i++) {
+            const a = (i / 3) * Math.PI * 2 + e.seed;
+            _v2.set(e.obj.position.x + Math.cos(a) * 7, e.obj.position.y, e.obj.position.z + Math.sin(a) * 7);
+            ctx.spawnMinion(_v2);
+            ctx.fx.pillar(_v2.x, _v2.z, 0, _v2.y + 6, 0xffb054, 1.6, 0.5);
+          }
+          ctx.fx.ring(e.obj.position.x, e.obj.position.y, e.obj.position.z, 0xffb054, 18, 0.6, false, 2);
+          e.state = "chase";
+          e.stateT = 0;
+          e.combo = 0;
+        }
+        break;
+      }
+      case "judging": {
+        // meteor judgement: mark the player's ground position, then annihilate it
+        pose = POSES.blast;
+        blendK = 10;
+        e.v.multiplyScalar(Math.exp(-2.5 * dt));
+        rig.setEyeGlow(0xffd23f, 3.8);
+        if (e.stateT > 0.55 && (!e.tele || e.tele.fired)) {
+          if (!e.tele) {
+            e.tele = { x: ctx.hero.x, z: ctx.hero.z, t: 0, fired: false };
+            ctx.judgement(e.tele.x, e.tele.z, 1.15);
+            ctx.sfx("warn", 0.9);
+          }
+        }
+        if (e.tele && !e.tele.fired) {
+          e.tele.t += dt;
+          if (e.tele.t > 1.25) {
+            ctx.blastAt(e.tele.x, e.tele.z, 30, 30);
+            const surf = ctx.city.surfaceY(e.tele.x, e.tele.z);
+            ctx.fx.shock(e.tele.x, surf + 1, e.tele.z, 0xffb054, 44, 0.7);
+            ctx.fx.pillar(e.tele.x, e.tele.z, surf, surf + 90, 0xffd23f, 5, 0.5);
+            ctx.fx.light(e.tele.x, surf + 10, e.tele.z, 0xffb054, 900, 0.5);
+            ctx.sfx("slam", 1);
+            ctx.shake(13);
+            e.tele = null;
+            e.state = "chase";
+            e.stateT = 0;
+            if (enraged && Math.random() < 0.5) e.state = "judging"; // chain a second strike
+          }
+        }
+        if (e.stateT > 3.2) { e.state = "chase"; e.stateT = 0; e.tele = null; }
+        break;
+      }
+    }
+
+    this.bossFinish(e, ctx, toHero, pitch, enraged, 0xffd23f, blendK, pose);
   }
 }
 

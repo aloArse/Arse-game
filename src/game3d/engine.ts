@@ -3,10 +3,14 @@ import * as THREE from "three";
 import { FX, Trail } from "./fx";
 import { City, CITY_HALF } from "./city";
 import { Rig, POSES, HERO_PAL } from "./character";
-import { Enemies, type EKind, type Enemy } from "./enemies";
+import { Enemies, BOSS_TYPES, type EKind, type Enemy } from "./enemies";
 import { audio } from "../game/audio";
 import { installKeyboard, moveAxis, vertAxis, holdStrike, holdBlast, holdBlock, take, clearAll } from "../game/input";
 import { makeHud, type HudState, type RunStats } from "../game/types";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 
 const clamp = (v: number, a: number, b: number): number => (v < a ? a : v > b ? b : v);
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
@@ -122,6 +126,17 @@ export class Engine {
 
   // run
   private wave = 0; private quota = 0; private spawned = 0;
+  /* postprocessing (adaptive bloom) */
+  private composer: EffectComposer | null = null;
+  private bloomOn = true;
+  private fpsEma = 60;
+  private lowFpsT = 0;
+  /* viltrumite aging — power grows with age, persists across runs */
+  private heroAge = 18;
+  private ageFlashT = 0;
+  private lastIntensity = -1;
+  private judgementMarks: { x: number; z: number; t: number; dur: number; pulse: number }[] = [];
+  private heartT = 0;
   private spawnT = 0; private betweenT = 0;
   private kills = 0; private score = 0; private combo = 0; private comboT = 0;
   private maxCombo = 0; private runTime = 0;
@@ -175,6 +190,19 @@ export class Engine {
     this.fx = new FX(this.scene);
     this.city = new City(this.scene);
     this.enemies = new Enemies(this.scene);
+
+    // cinematic bloom pipeline (auto-disables on weak GPUs)
+    try {
+      const composer = new EffectComposer(this.renderer);
+      composer.addPass(new RenderPass(this.scene, this.camera));
+      const bloom = new UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        0.72, 0.55, 0.82,
+      );
+      composer.addPass(bloom);
+      composer.addPass(new OutputPass());
+      this.composer = composer;
+    } catch { this.composer = null; }
     this.trail = new Trail(this.scene, 28, 0xaad6ff, 0.55);
     this.fistTrailL = new Trail(this.scene, 11, 0xffe9b0, 0.34);
     this.fistTrailR = new Trail(this.scene, 11, 0xffe9b0, 0.34);
@@ -367,6 +395,7 @@ export class Engine {
   }
 
   private onResize = (): void => {
+    this.composer?.setSize(window.innerWidth, window.innerHeight);
     const w = window.innerWidth, h = window.innerHeight;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
@@ -427,7 +456,10 @@ export class Engine {
     clearAll();
     audio.ensure();
     audio.startMusic();
-    this.setMsg("DEFEND THE CITY — WAVE 1 INBOUND", 2.6, "info");
+    this.loadAge();
+    this.judgementMarks.length = 0;
+    this.lastIntensity = -1;
+    this.setMsg(`DEFEND THE CITY — AGE ${this.heroAge} · PWR ${Math.round(this.powerMult() * 100)}%`, 2.6, "info");
   }
 
   private resetHero(): void {
@@ -435,7 +467,7 @@ export class Engine {
     this.vel.set(0, 0, 0);
     this.yaw = Math.PI;
     this.roll = 0; this.flyK = 0; this.cruise = 0;
-    this.hp = 100; this.en = 100; this.od = 0; this.odT = 0;
+    this.hp = this.hpMax(); this.en = 100; this.od = 0; this.odT = 0;
     this.iT = 0; this.hurtT = 0; this.regenT = 0;
     this.punchT = 0; this.blastT = 0; this.slamT = 0;
     this.comboStep = 0; this.comboWindow = 0;
@@ -493,7 +525,18 @@ export class Engine {
         this.updateSkyAndClouds(raw);
       }
 
-      if (!this.contextLost) this.renderer.render(this.scene, this.camera);
+      if (!this.contextLost) {
+        // adaptive quality: drop bloom if the device can't hold ~30fps
+        this.fpsEma = this.fpsEma * 0.95 + (1 / Math.max(0.001, raw)) * 0.05;
+        if (this.bloomOn && this.composer) {
+          if (this.fpsEma < 28) {
+            this.lowFpsT += raw;
+            if (this.lowFpsT > 2.5) { this.bloomOn = false; }
+          } else this.lowFpsT = Math.max(0, this.lowFpsT - raw * 0.5);
+        }
+        if (this.bloomOn && this.composer) this.composer.render();
+        else this.renderer.render(this.scene, this.camera);
+      }
       this.raf = requestAnimationFrame(this.loop);
     } catch (error) {
       this.failed = true;
@@ -597,10 +640,51 @@ export class Engine {
       slamBlast: (at, radius, dmg) => this.enemySlam(at, radius, dmg),
       dropBomb: (from, vel) => this.dropBomb(from, vel),
       sfx: (n, p) => audio.play(n as "punch", p),
+      spawnMinion: (p) => { const m = this.enemies.spawn("drone", p, 1 + this.wave * 0.08); m.hp *= 0.6; m.maxHp = m.hp; },
+      judgement: (x, z, delay) => this.addJudgement(x, z, delay),
+      blastAt: (x, z, radius, dmg) => this.cityStrike(x, z, radius, dmg),
     });
 
+    this.updateJudgements(dt);
+    this.updateMusicIntensity();
+    this.updateVitalFx(dt);
     this.updateCamera(raw, false);
     this.syncHud();
+  }
+
+  /** dynamic music: calm flight → combat drums → warlord theme */
+  private updateMusicIntensity(): void {
+    let want = 0;
+    if (this.enemies.list.some((e) => !e.dead)) want = 1;
+    if (this.enemies.boss && !this.enemies.boss.dead) want = 2;
+    if (want !== this.lastIntensity) {
+      this.lastIntensity = want;
+      audio.setIntensity(want);
+    }
+  }
+
+  /** low-hp heartbeat + hypersonic wind streaks */
+  private updateVitalFx(dt: number): void {
+    if (this.hp < this.hpMax() * 0.28 && !this.heroDead) {
+      this.heartT -= dt;
+      if (this.heartT <= 0) {
+        this.heartT = 1.05;
+        audio.play("heartbeat", 1);
+      }
+    }
+    const spd = this.vel.length();
+    if (spd > 62 && !this.heroDead) {
+      const k = Math.min(1, (spd - 62) / 90);
+      if (Math.random() < 0.35 + k * 0.5) {
+        // wind streaks rushing past the hero
+        const s = this._v;
+        s.copy(this.vel).normalize();
+        const px = this.pos.x - s.x * 6 + (Math.random() - 0.5) * 14;
+        const py = this.pos.y - s.y * 6 + (Math.random() - 0.5) * 10;
+        const pz = this.pos.z - s.z * 6 + (Math.random() - 0.5) * 14;
+        this.fx.jet(px, py, pz, -s.x, -s.y, -s.z, 0xbcd8ff, 1, spd * 1.35, 0.06, 0.55 + k * 0.5, 0.3 + k * 0.2);
+      }
+    }
   }
 
   private updateDeath(dt: number, raw: number): void {
@@ -621,6 +705,7 @@ export class Engine {
     this.updateCamera(raw, true);
     if (this.deadT <= 0 && this.mode === "playing") {
       this.mode = "over";
+      this.saveAge();
       this.hooks.onGameOver({
         score: this.score, wave: this.wave, kills: this.kills,
         maxCombo: this.maxCombo, demolished: this.city.demolished, time: this.runTime,
@@ -682,8 +767,9 @@ export class Engine {
       : Math.max(0, this.blockT - dt * 10);
 
     const blocking = this.blockT > 0.55;
-    const maxSpd = (36 + this.cruise * 62) * (od ? 1.22 : 1) * (blocking ? 0.4 : 1);
-    const accel = (od ? 132 : 108) * (blocking ? 0.4 : 1);
+    const ageS = this.speedMult();
+    const maxSpd = (36 + this.cruise * 62) * (od ? 1.22 : 1) * (blocking ? 0.4 : 1) * ageS;
+    const accel = (od ? 132 : 108) * (blocking ? 0.4 : 1) * ageS;
 
     // aim direction (facing, used by abilities)
     if (flatIn > 0.1 || Math.abs(vert) > 0.1) {
@@ -759,7 +845,7 @@ export class Engine {
 
     // ---- regen ----
     if (this.en < 100 && this.dashT <= 0) this.en = Math.min(100, this.en + 13 * dt);
-    if (this.regenT <= 0 && this.hp < 100) this.hp = Math.min(100, this.hp + 3.4 * dt);
+    if (this.regenT <= 0 && this.hp < this.hpMax()) this.hp = Math.min(this.hpMax(), this.hp + 3.4 * dt);
 
     // ---- orientation + animation ----
     this.animateHero(dt, raw, mv.mag, vert, od, blocking);
@@ -1027,7 +1113,7 @@ export class Engine {
       if (tgt) {
         this.flurryOn = true;
         this.comboWindow = 0.85; // the barrage sustains the chain
-        this.cd.strike = CD_STRIKE * 0.38 * (od ? 0.72 : 1);
+        this.cd.strike = this.cdOf(CD_STRIKE * 0.38) * (od ? 0.72 : 1);
         this.punchT = 0.12;
         this.rig.playClip(this.punchSide === 0 ? "flurryR" : "flurryL", od ? 1.4 : 1.15);
         this.punchSide = 1 - this.punchSide;
@@ -1077,7 +1163,7 @@ export class Engine {
     this.comboStep = (step + 1) % 3;
     this.comboWindow = 0.85;
 
-    this.cd.strike = (finisher ? CD_STRIKE * 1.8 : CD_STRIKE) * (od ? 0.72 : 1);
+    this.cd.strike = this.cdOf(finisher ? CD_STRIKE * 1.8 : CD_STRIKE) * (od ? 0.72 : 1);
     this.punchT = finisher ? 0.34 : 0.24;
     this.punchSide = step;
     this.rig.playClip(step === 0 ? "jabR" : step === 1 ? "crossL" : "uppercutR", od ? 1.25 : 1);
@@ -1191,7 +1277,7 @@ export class Engine {
   private doCyclone(): void {
     const od = this.odT > 0;
     this.en -= EN_CYCLONE;
-    this.cd.cyclone = CD_CYCLONE;
+    this.cd.cyclone = this.cdOf(CD_CYCLONE);
     this.cycloneT = od ? 1.05 : 0.9;
     this.cycloneHitT = 0;
     this.cycloneSpin = 0;
@@ -1443,7 +1529,7 @@ export class Engine {
 
   private doDash(): void {
     this.en -= EN_DASH;
-    this.cd.dash = CD_DASH;
+    this.cd.dash = this.cdOf(CD_DASH);
     this.dashT = 0.3;
     this.dashId = this.enemies.markDash();
     this.dashDir.copy(this._aim).normalize();
@@ -1457,7 +1543,7 @@ export class Engine {
 
   private startSlam(): void {
     this.en -= EN_SLAM;
-    this.cd.slam = CD_SLAM;
+    this.cd.slam = this.cdOf(CD_SLAM);
     this.slamPhase = "rise";
     this.slamT = 0.42;
     this.iT = Math.max(this.iT, 0.3);
@@ -1469,7 +1555,7 @@ export class Engine {
   private startPiledrive(): void {
     const g = this.grabbed;
     if (!g) return;
-    this.cd.slam = CD_SLAM;
+    this.cd.slam = this.cdOf(CD_SLAM);
     this.slamPhase = "pdRise";
     this.slamT = 0.5;
     this.iT = Math.max(this.iT, 0.5);
@@ -1772,7 +1858,7 @@ export class Engine {
         this.fx.spark(p.x, p.y + 1, p.z, 0xffb054, 42, 34, 0.7, 0.6, -18, 0.7);
         this.fx.smoke(p.x, p.y + 1, p.z, 18, 14, 4.5, 0x8f8490, 3);
         this.city.spawnDebris(p.x, p.y, p.z, 10, 20, 4);
-        this.city.blast(p, R, 130, this.fx);
+        this.city.blast(p, R, 300, this.fx);
         this.shake = Math.max(this.shake, 7);
         audio.play("boom", 0.85);
         const d = this.pos.distanceTo(p);
@@ -1819,7 +1905,7 @@ export class Engine {
         o.v.y = Math.abs(o.v.y) * 0.4;
       }
       if (d < 2.6 && !this.heroDead) {
-        if (o.kind === "hp") this.hp = Math.min(100, this.hp + 16);
+        if (o.kind === "hp") this.hp = Math.min(this.hpMax(), this.hp + 16);
         else this.en = Math.min(100, this.en + 30);
         this.fx.flash(o.mesh.position.x, o.mesh.position.y, o.mesh.position.z,
           o.kind === "hp" ? 0x7dff9e : 0x6ecbff, 3, 0.25);
@@ -1881,9 +1967,80 @@ export class Engine {
 
   /* ---------------- damage ---------------- */
 
+  /* ---------------- viltrumite growth ---------------- */
+
+  /** power multiplier from age — every year past 18: +3% damage (cap +150%) */
+  private powerMult(): number { return Math.min(2.5, 1 + (this.heroAge - 18) * 0.03); }
+  /** speed multiplier from age (cap +45%) */
+  private speedMult(): number { return Math.min(1.45, 1 + (this.heroAge - 18) * 0.012); }
+  /** max hp from age (+2.5/yr, cap 250) */
+  private hpMax(): number { return Math.min(250, Math.round(100 + (this.heroAge - 18) * 2.5)); }
+  /** cooldown multiplier from age (floor 70%) */
+  private cdOf(base: number): number { return base * Math.max(0.7, 1 - (this.heroAge - 18) * 0.008); }
+
+  private loadAge(): void {
+    try {
+      const v = window.localStorage.getItem("sg_age_v1");
+      if (v) this.heroAge = Math.max(18, Math.min(200, parseInt(v, 10) || 18));
+    } catch { /* private mode */ }
+  }
+
+  private saveAge(): void {
+    try { window.localStorage.setItem("sg_age_v1", String(this.heroAge)); } catch { /* noop */ }
+  }
+
+  private growAge(years: number): void {
+    this.heroAge += years;
+    this.ageFlashT = 3.2;
+    this.saveAge();
+    audio.play("levelup", 1);
+    navigator.vibrate?.([30, 40, 30]);
+    this.setMsg(
+      `VILTRUMITE GROWTH — AGE ${this.heroAge} · PWR ${Math.round(this.powerMult() * 100)}%`,
+      3, "info",
+    );
+  }
+
+  /** warlord judgement: pulsing ground telegraph before the strike lands */
+  private addJudgement(x: number, z: number, delay: number): void {
+    this.judgementMarks.push({ x, z, t: 0, dur: delay, pulse: 0 });
+  }
+
+  private updateJudgements(dt: number): void {
+    for (let i = this.judgementMarks.length - 1; i >= 0; i--) {
+      const j = this.judgementMarks[i];
+      j.t += dt;
+      j.pulse -= dt;
+      if (j.pulse <= 0) {
+        j.pulse = 0.14;
+        const surf = this.city.surfaceY(j.x, j.z);
+        const k = 1 - Math.max(0, Math.min(1, j.t / j.dur));
+        this.fx.ring(j.x, surf + 0.6, j.z, 0xffb054, 3 + 26 * k, 0.3, true, 2.2);
+      }
+      if (j.t >= j.dur) this.judgementMarks.splice(i, 1);
+    }
+  }
+
+  /** ground detonation used by warlord judgement strikes */
+  private cityStrike(x: number, z: number, radius: number, dmg: number): void {
+    const surf = this.city.surfaceY(x, z);
+    this._v2.set(x, surf + 2, z);
+    this.city.blast(this._v2, radius, 400 + dmg * 12, this.fx);
+    this.fx.shock(x, surf + 1, z, 0xffb054, radius * 1.5, 0.7);
+    this.fx.flash(x, surf + 4, z, 0xffd9a0, radius * 0.8, 0.4);
+    this.fx.smoke(x, surf + 3, z, 24, 16, 7, 0x6d6470, 4);
+    this.fx.chunk(x, surf + 2, z, 0xb9b2a6, 18, 24, 1.4, 1.8);
+    this.fx.light(x, surf + 10, z, 0xffb054, 1200, 0.6);
+    this.city.addFire(x + (Math.random() - 0.5) * 8, 1.6, z + (Math.random() - 0.5) * 8, 12, 1);
+    const d = Math.hypot(this.pos.x - x, this.pos.z - z);
+    if (d < radius && Math.abs(this.pos.y - surf) < 30) {
+      this.damagePlayer(dmg * (1 - d / radius), this._v2);
+    }
+  }
+
   private damageEnemy(e: Enemy, dmg: number, combo: boolean): void {
     if (e.dead) return;
-    e.hp -= dmg;
+    e.hp -= dmg * this.powerMult();
     e.flash = 0.1;
     this.addOd(dmg * 0.35);
     if (combo) this.addCombo(1);
@@ -1928,11 +2085,19 @@ export class Engine {
     this.fx.spark(p.x, p.y, p.z, col, big ? 90 : mid ? 54 : 34, big ? 60 : 36, big ? 1.1 : 0.7, big ? 1.1 : 0.6, -14, 1);
     this.fx.spark(p.x, p.y, p.z, 0xffffff, 18, 26, 0.5, 0.4, -6, 1);
     this.fx.flash(p.x, p.y, p.z, col, big ? 22 : 7, big ? 0.5 : 0.26);
-    this.fx.ring(p.x, p.y, p.z, col, big ? 70 : 18, big ? 0.9 : 0.45, false, big ? 2.4 : 1.2);
+    if (big) {
+      this.fx.shock(p.x, p.y, p.z, col, 78, 0.9);
+      this.fx.light(p.x, p.y, p.z, col, 1400, 0.55);
+      this.fx.chunk(p.x, p.y, p.z, 0xb9b2a6, 16, 22, 1.2, 1.6);
+    } else {
+      this.fx.ring(p.x, p.y, p.z, col, 18, 0.45, false, 1.2);
+    }
     this.fx.smoke(p.x, p.y, p.z, big ? 30 : 10, big ? 16 : 9, big ? 6 : 2.6, 0x8f8490, big ? 4 : 2.2);
     this.city.spawnDebris(p.x, p.y, p.z, big ? 22 : 6, big ? 26 : 14, big ? 5 : 2.4);
     this.shake = Math.max(this.shake, big ? 20 : 4.5);
     audio.play("explode", big ? 1.4 : 0.8);
+    // hit-stop: micro freeze that sells the impact
+    this.stopT = Math.max(this.stopT, big ? 0.1 : 0.045);
 
     if (e.kind === "boss") {
       this.slowT = Math.max(this.slowT, 1.0);
@@ -2037,17 +2202,21 @@ export class Engine {
     const boss = n % 5 === 0;
     this.quota = boss ? 1 : Math.min(22, 4 + Math.round(n * 1.5));
     this.spawnT = boss ? 1.4 : 0.6;
+    // a wave was cleared → the hero ages and grows (boss clears are worth more)
+    if (n > 1) {
+      const cleared = n - 1;
+      this.growAge(cleared % 5 === 0 ? 3 : 1);
+      this.hp = Math.min(this.hpMax(), this.hp + 16);
+      this.score += 180 * (n - 1);
+    }
     if (boss) {
-      this.setMsg("WARNING — VILTRUMITE SIGNATURE INBOUND", 3, "warn");
+      const bt = BOSS_TYPES[Math.floor(n / 5) - 1];
+      this.setMsg(`⚠ ${bt.name} ${bt.title} INBOUND ⚠`, 3.2, "warn");
       audio.play("warn");
       this.slowT = Math.max(this.slowT, 0.6);
     } else {
       this.setMsg(`WAVE ${n}`, 2, "info");
       audio.play("wave", 0.8);
-      if (n > 1) {
-        this.hp = Math.min(100, this.hp + 16);
-        this.score += 180 * (n - 1);
-      }
     }
   }
 
@@ -2069,7 +2238,7 @@ export class Engine {
 
   private spawnAt(kind: EKind): void {
     const a = Math.random() * Math.PI * 2;
-    const dist = kind === "boss" ? 62 : kind === "mech" ? 90 : 70 + Math.random() * 50;
+    const dist = kind === "boss" ? 40 : kind === "mech" ? 90 : 70 + Math.random() * 50;
     const p = new THREE.Vector3(
       this.pos.x + Math.cos(a) * dist,
       0,
@@ -2083,7 +2252,8 @@ export class Engine {
     p.y = clamp(p.y, 16, MAX_ALT - 30);
 
     const hpMult = 1 + this.wave * 0.1;
-    const e = this.enemies.spawn(kind, p, hpMult);
+    const bossIdx = Math.floor(this.wave / 5) - 1;
+    const e = this.enemies.spawn(kind, p, hpMult, bossIdx);
 
     const col =
       kind === "boss" ? 0xff4757 :
@@ -2092,10 +2262,18 @@ export class Engine {
             kind === "raptor" ? 0xff6b7a : 0x7ae0ff;
     this.fx.ring(p.x, p.y, p.z, col, kind === "boss" ? 30 : 12, 0.6, false, 1.4);
     if (kind === "boss") {
-      this.fx.flash(p.x, p.y, p.z, 0xff4757, 14, 0.5);
-      audio.play("roar");
-      this.shake = Math.max(this.shake, 10);
-      navigator.vibrate?.(120);
+      // warlord entrance: sky pillar + double shock + light + roar
+      const bt = BOSS_TYPES[Math.abs(bossIdx) % BOSS_TYPES.length];
+      const surf = this.city.surfaceY(p.x, p.z);
+      this.fx.flash(p.x, p.y, p.z, bt.color, 16, 0.6);
+      this.fx.pillar(p.x, p.z, surf, p.y + 40, bt.color, 6, 1.2);
+      this.fx.shock(p.x, p.y, p.z, bt.color, 46, 0.9);
+      this.fx.light(p.x, p.y, p.z, bt.color, 1600, 1.1);
+      audio.play("bossroar");
+      this.shake = Math.max(this.shake, 12);
+      this.slowT = Math.max(this.slowT, 0.45);
+      navigator.vibrate?.([80, 60, 160]);
+      this.setMsg(`${bt.name} ${bt.title} — ENGAGE`, 2.4, "warn");
     } else if (kind === "mech") {
       this.fx.flash(p.x, p.y, p.z, 0xff8a3c, 9, 0.4);
       audio.play("roar", 0.6);
@@ -2186,7 +2364,16 @@ export class Engine {
     h.spd = this.vel.length() * 3.6;
     const boss = this.enemies.boss;
     h.bossOn = !!boss && !boss.dead;
-    if (boss) { h.bossHp = Math.max(0, boss.hp); h.bossMax = boss.maxHp; }
+    if (boss) {
+      h.bossHp = Math.max(0, boss.hp);
+      h.bossMax = boss.maxHp;
+      h.bossName = boss.bossName ? `${boss.bossName} · ${BOSS_TYPES.find((b) => b.name === boss.bossName)?.title ?? ""}` : "WARLORD";
+    }
+    h.age = this.heroAge;
+    h.power = Math.round(this.powerMult() * 100);
+    h.maxHp = this.hpMax();
+    this.ageFlashT = Math.max(0, this.ageFlashT - 0.016);
+    h.ageFlash = this.ageFlashT;
     h.cds.strike = this.cd.strike;
     h.cds.blast = this.cd.blast;
     h.cds.dash = this.cd.dash;

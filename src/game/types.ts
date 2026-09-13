@@ -21,6 +21,10 @@ export interface HudState {
   enCost: { blast: number; dash: number; slam: number; cyclone: number };
   blocking: boolean;     // hero is bracing
   flurry: boolean;       // hero is in barrage mode
+  age: number;           // viltrumite age (years) — power grows with age
+  power: number;         // derived power percentage (100 = base)
+  ageFlash: number;      // >0 while the growth toast is showing
+  bossName: string;      // active warlord name (boss bar)
   msg: string;
   msgT: number;
   msgKind: "info" | "warn";
@@ -48,6 +52,7 @@ export function makeHud(): HudState {
     cdMax: { strike: 0.36, blast: 0.16, dash: 2.2, slam: 6.5, cyclone: 5.5 },
     enCost: { blast: 4, dash: 12, slam: 32, cyclone: 18 },
     blocking: false, flurry: false,
+    age: 18, power: 100, ageFlash: 0, bossName: "",
     msg: "", msgT: 0, msgKind: "info",
     hurt: 0, time: 0,
   };

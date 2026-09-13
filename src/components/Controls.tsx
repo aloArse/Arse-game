@@ -10,7 +10,7 @@ type BtnName = "strike" | "blast" | "dash" | "slam" | "cyclone";
 const CD_BTNS: BtnName[] = ["strike", "blast", "dash", "slam", "cyclone"];
 
 export default function Controls({ game }: { game: Engine }) {
-  const [joy, setJoy] = useState<{ id: number; bx: number; by: number; dx: number; dy: number } | null>(null);
+  const [joy, setJoy] = useState<{ id: number; ax: number; ay: number; bx: number; by: number; dx: number; dy: number } | null>(null);
   const [pressed, setPressed] = useState<Record<string, boolean>>({});
   const [everUsed, setEverUsed] = useState(false);
 
@@ -81,8 +81,13 @@ export default function Controls({ game }: { game: Engine }) {
     touch.blast = false; touch.strike = false; touch.up = false; touch.down = false; touch.block = false;
   }, []);
 
-  /* ---------- floating joystick (dynamic base-follow) ---------- */
-  const MAXR = 62;
+  /* ---------- floating joystick (leashed dynamic base) ----------
+     The base follows the thumb so full deflection is always reachable,
+     BUT it is leashed to the touch-down anchor (±LEASH px) and clamped
+     inside the zone — it can never wander across the whole screen, so
+     your hand stays put. */
+  const MAXR = 58;
+  const LEASH = 84;
 
   const onZoneDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (joy) return;
@@ -91,7 +96,7 @@ export default function Controls({ game }: { game: Engine }) {
     maxedRef.current = false;
     pad.active = true;
     pad.x = 0; pad.y = 0; pad.mag = 0;
-    setJoy({ id: e.pointerId, bx: e.clientX, by: e.clientY, dx: 0, dy: 0 });
+    setJoy({ id: e.pointerId, ax: e.clientX, ay: e.clientY, bx: e.clientX, by: e.clientY, dx: 0, dy: 0 });
   };
   const onZoneMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!joy || e.pointerId !== joy.id) return;
@@ -101,12 +106,26 @@ export default function Controls({ game }: { game: Engine }) {
     let bx = joy.bx;
     let by = joy.by;
     if (len > MAXR) {
-      // the base drifts with the finger so the stick never caps out —
-      // full deflection stays reachable anywhere on screen
-      bx = e.clientX - (dx / len) * MAXR;
-      by = e.clientY - (dy / len) * MAXR;
-      dx = (dx / len) * MAXR;
-      dy = (dy / len) * MAXR;
+      // base chases the finger, but only within the leash radius of the anchor
+      let nx = e.clientX - (dx / len) * MAXR;
+      let ny = e.clientY - (dy / len) * MAXR;
+      const adx = nx - joy.ax, ady = ny - joy.ay;
+      const ad = Math.hypot(adx, ady);
+      if (ad > LEASH) {
+        nx = joy.ax + (adx / ad) * LEASH;
+        ny = joy.ay + (ady / ad) * LEASH;
+      }
+      // keep the base fully inside the zone with a margin
+      const el = e.currentTarget as HTMLElement;
+      const r = el.getBoundingClientRect();
+      nx = Math.min(Math.max(nx, r.left + 74), r.right - 74);
+      ny = Math.min(Math.max(ny, r.top + 74), r.bottom - 74);
+      dx = e.clientX - nx;
+      dy = e.clientY - ny;
+      const l2 = Math.hypot(dx, dy) || 1;
+      dx = (dx / l2) * Math.min(l2, MAXR);
+      dy = (dy / l2) * Math.min(l2, MAXR);
+      bx = nx; by = ny;
     }
     pad.x = dx / MAXR;
     pad.y = dy / MAXR;
@@ -160,12 +179,17 @@ export default function Controls({ game }: { game: Engine }) {
   };
 
   const hint = (t: string) => <span className="key-hint kbd-only">{t}</span>;
+  const label = (t: string) => (
+    <span className="pointer-events-none absolute -bottom-[13px] left-0 right-0 text-center font-hud text-[8.5px] font-bold tracking-[0.14em] text-indigo-100/85">
+      {t}
+    </span>
+  );
 
   return (
     <>
       {/* ---------- joystick zone (left half) ---------- */}
       <div
-        className="absolute left-0 top-0 h-full w-[46%]"
+        className="absolute left-0 top-0 z-10 h-full w-[44%]"
         style={{ touchAction: "none" }}
         onPointerDown={onZoneDown}
         onPointerMove={onZoneMove}
@@ -201,7 +225,7 @@ export default function Controls({ game }: { game: Engine }) {
           const cruise = mag > 0.75;
           return (
             <>
-              <div className="joy-base" style={{ left: joy.bx - 64, top: joy.by - 64, width: 128, height: 128 }} />
+              <div className="joy-base" style={{ left: joy.bx - 60, top: joy.by - 60, width: 120, height: 120 }} />
               {/* gate ticks */}
               {[0, 45, 90, 135, 180, 225, 270, 315].map((a) => (
                 <span
@@ -211,7 +235,7 @@ export default function Controls({ game }: { game: Engine }) {
                     left: joy.bx, top: joy.by,
                     width: 2, height: 7,
                     background: "rgba(160,185,255,0.3)",
-                    transform: `rotate(${a}deg) translateY(-60px)`,
+                    transform: `rotate(${a}deg) translateY(-56px)`,
                     transformOrigin: "0 0",
                   }}
                 />
@@ -220,7 +244,7 @@ export default function Controls({ game }: { game: Engine }) {
               <div
                 className="pointer-events-none absolute rounded-full"
                 style={{
-                  left: joy.bx - 64, top: joy.by - 64, width: 128, height: 128,
+                  left: joy.bx - 60, top: joy.by - 60, width: 120, height: 120,
                   padding: 4,
                   background: `conic-gradient(from -90deg, ${cruise ? "#ff7a3c" : "#ffd23f"} ${mag * 360}deg, rgba(120,140,200,0.18) 0deg)`,
                   WebkitMask: "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)",
@@ -240,7 +264,7 @@ export default function Controls({ game }: { game: Engine }) {
                 >
                   <div
                     style={{
-                      position: "absolute", left: 44, top: -5,
+                      position: "absolute", left: 42, top: -5,
                       width: 0, height: 0,
                       borderTop: "5px solid transparent",
                       borderBottom: "5px solid transparent",
@@ -251,44 +275,44 @@ export default function Controls({ game }: { game: Engine }) {
               )}
               <div
                 className="joy-knob"
-                style={{ left: joy.bx - 29 + joy.dx * 0.74, top: joy.by - 29 + joy.dy * 0.74, width: 58, height: 58 }}
+                style={{ left: joy.bx - 27 + joy.dx * 0.72, top: joy.by - 27 + joy.dy * 0.72, width: 54, height: 54 }}
               />
             </>
           );
         })()}
       </div>
 
-      {/* ---------- ability cluster ---------- */}
+      {/* ---------- ability cluster (compact ergonomic arc) ---------- */}
       <div
-        className="absolute right-2 bottom-[max(0.9rem,env(safe-area-inset-bottom))] origin-bottom-right max-[620px]:scale-[0.8] max-[420px]:scale-[0.68]"
+        className="absolute right-2 bottom-[max(0.9rem,env(safe-area-inset-bottom))] z-20 origin-bottom-right max-[620px]:scale-[0.8] max-[420px]:scale-[0.66]"
         style={{ touchAction: "none" }}
         onContextMenu={(e) => e.preventDefault()}
       >
-        <div className="relative h-[272px] w-[352px]">
-          {/* altitude thrusters */}
+        <div className="relative h-[236px] w-[268px]">
+          {/* altitude thrusters — left edge column */}
           <button
             {...bind("up")}
             aria-label="Ascend"
-            className={`abtn absolute left-[6px] top-[100px] h-[58px] w-[58px] ${pressed.up ? "pressed" : ""}`}
+            className={`abtn absolute left-0 top-[64px] h-[54px] w-[54px] ${pressed.up ? "pressed" : ""}`}
           >
-            <ChevronUp size={30} strokeWidth={3} />
-            {hint("SPACE")}
+            <ChevronUp size={26} strokeWidth={3} />
+            {label("UP")}
           </button>
           <button
             {...bind("down")}
             aria-label="Descend"
-            className={`abtn absolute left-[6px] top-[172px] h-[58px] w-[58px] ${pressed.down ? "pressed" : ""}`}
+            className={`abtn absolute left-0 top-[132px] h-[54px] w-[54px] ${pressed.down ? "pressed" : ""}`}
           >
-            <ChevronDown size={30} strokeWidth={3} />
-            {hint("C")}
+            <ChevronDown size={26} strokeWidth={3} />
+            {label("DOWN")}
           </button>
 
-          {/* overdrive */}
+          {/* overdrive — top left */}
           <button
             ref={odBtnRef}
             {...bind("over")}
             aria-label="Overdrive"
-            className="abtn absolute right-[58px] top-0 h-[56px] w-[56px] transition-opacity"
+            className="abtn absolute left-[74px] top-0 h-[52px] w-[52px] transition-opacity"
             style={{ opacity: 0.4 }}
           >
             <div
@@ -301,85 +325,87 @@ export default function Controls({ game }: { game: Engine }) {
                 maskComposite: "exclude",
               }}
             />
-            <Flame size={24} className="drop-shadow-[0_0_6px_rgba(255,150,40,0.8)]" />
+            <Flame size={22} className="drop-shadow-[0_0_6px_rgba(255,150,40,0.8)]" />
+            {label("RAGE")}
             {hint("I")}
           </button>
 
-          {/* block / brace (hold) */}
+          {/* grab / thunder clap — top middle */}
+          <button
+            {...bind("grab")}
+            aria-label="Grab or thunder clap"
+            className={`abtn absolute left-[140px] top-0 h-[52px] w-[52px] ${pressed.grab ? "pressed" : ""}`}
+          >
+            <Grab size={22} />
+            {label("GRAB")}
+            {hint("G")}
+          </button>
+
+          {/* block / brace (hold) — top right */}
           <button
             ref={blockBtnRef}
             {...bind("block")}
             aria-label="Brace"
-            className={`abtn absolute right-[4px] top-[76px] h-[62px] w-[62px] transition-all ${pressed.block ? "pressed" : ""}`}
+            className={`abtn absolute right-[8px] top-[22px] h-[58px] w-[58px] transition-all ${pressed.block ? "pressed" : ""}`}
           >
-            <Shield size={26} className="text-sky-300" />
-            {hint("B · HOLD")}
+            <Shield size={24} className="text-sky-300" />
+            {label("BRACE")}
           </button>
 
-          {/* grab / thunder clap */}
-          <button
-            {...bind("grab")}
-            aria-label="Grab or thunder clap"
-            className={`abtn absolute left-[196px] top-[-6px] h-[58px] w-[58px] ${pressed.grab ? "pressed" : ""}`}
-          >
-            <Grab size={24} />
-            {hint("G")}
-          </button>
-
-          {/* cyclone spin */}
+          {/* cyclone spin — left of dash */}
           <button
             ref={(r) => { btnRefs.current.cyclone = r; }}
             {...bind("cyclone")}
             aria-label="Cyclone spin"
-            className={`abtn absolute left-[204px] top-[62px] h-[64px] w-[64px] ${pressed.cyclone ? "pressed" : ""}`}
+            className={`abtn absolute left-[78px] top-[64px] h-[60px] w-[60px] ${pressed.cyclone ? "pressed" : ""}`}
           >
-            <Tornado size={27} className="text-amber-300" />
+            <Tornado size={25} className="text-amber-300" />
             <div ref={(r) => { ovRefs.current.cyclone = r; }} className="cd-sweep font-hud text-lg" />
-            {hint("H")}
+            {label("CYCLONE")}
           </button>
 
-          {/* slam */}
+          {/* slam — above strike */}
           <button
             ref={(r) => { btnRefs.current.slam = r; }}
             {...bind("slam")}
             aria-label="Nova slam or pile-driver"
-            className={`abtn absolute left-[104px] top-[52px] h-[64px] w-[64px] ${pressed.slam ? "pressed" : ""}`}
+            className={`abtn absolute right-[14px] top-[100px] h-[60px] w-[60px] ${pressed.slam ? "pressed" : ""}`}
           >
-            <Orbit size={26} />
+            <Orbit size={24} />
             <div ref={(r) => { ovRefs.current.slam = r; }} className="cd-sweep font-hud text-lg" />
-            {hint("L")}
+            {label("SLAM")}
           </button>
 
-          {/* dash */}
-          <button
-            ref={(r) => { btnRefs.current.dash = r; }}
-            {...bind("dash")}
-            aria-label="Sonic dash"
-            className={`abtn absolute left-[92px] top-[150px] h-[66px] w-[66px] ${pressed.dash ? "pressed" : ""}`}
-          >
-            <Wind size={27} />
-            <div ref={(r) => { ovRefs.current.dash = r; }} className="cd-sweep font-hud text-lg" />
-            {hint("SHIFT")}
-          </button>
-
-          {/* blast */}
+          {/* blast — middle bottom */}
           <button
             ref={(r) => { btnRefs.current.blast = r; }}
             {...bind("blast")}
             aria-label="Plasma blast"
-            className={`abtn absolute right-[96px] top-[150px] h-[66px] w-[66px] ${pressed.blast ? "pressed" : ""}`}
+            className={`abtn absolute right-[92px] bottom-[26px] h-[62px] w-[62px] ${pressed.blast ? "pressed" : ""}`}
           >
-            <Zap size={26} className="drop-shadow-[0_0_6px_rgba(255,210,63,0.7)]" />
+            <Zap size={24} className="drop-shadow-[0_0_6px_rgba(255,210,63,0.7)]" />
             <div ref={(r) => { ovRefs.current.blast = r; }} className="cd-sweep font-hud text-lg" />
-            {hint("K · HOLD")}
+            {label("BLAST")}
           </button>
 
-          {/* strike */}
+          {/* dash — left of blast */}
+          <button
+            ref={(r) => { btnRefs.current.dash = r; }}
+            {...bind("dash")}
+            aria-label="Sonic dash"
+            className={`abtn absolute left-[84px] bottom-[16px] h-[62px] w-[62px] ${pressed.dash ? "pressed" : ""}`}
+          >
+            <Wind size={25} />
+            <div ref={(r) => { ovRefs.current.dash = r; }} className="cd-sweep font-hud text-lg" />
+            {label("DASH")}
+          </button>
+
+          {/* strike — big primary, bottom right */}
           <button
             ref={(r) => { btnRefs.current.strike = r; strikeBtnRef.current = r; }}
             {...bind("strike")}
             aria-label="Power strike"
-            className={`abtn absolute right-[2px] bottom-[2px] h-[94px] w-[94px] ${pressed.strike ? "pressed" : ""}`}
+            className={`abtn absolute right-[2px] bottom-[2px] h-[88px] w-[88px] ${pressed.strike ? "pressed" : ""}`}
             style={{
               background:
                 "radial-gradient(circle at 32% 26%, rgba(255,255,255,0.35), transparent 42%), linear-gradient(160deg, #ffd23f, #f7931e 65%, #d9432b)",
@@ -388,8 +414,9 @@ export default function Controls({ game }: { game: Engine }) {
               color: "#2b1503",
             }}
           >
-            <Hand size={38} strokeWidth={2.4} />
+            <Hand size={34} strokeWidth={2.4} />
             <div ref={(r) => { ovRefs.current.strike = r; }} className="cd-sweep font-hud text-xl" />
+            {label("STRIKE")}
             {hint("J · HOLD = FLURRY")}
           </button>
         </div>

@@ -25,6 +25,9 @@ export default function Hud({ game, muted, onToggleMute }: {
   const comboNum = useRef<HTMLDivElement>(null);
   const bossWrap = useRef<HTMLDivElement>(null);
   const bossFill = useRef<HTMLDivElement>(null);
+  const bossNameEl = useRef<HTMLDivElement>(null);
+  const ageEl = useRef<HTMLDivElement>(null);
+  const ageWrap = useRef<HTMLDivElement>(null);
   const msgEl = useRef<HTMLDivElement>(null);
   const st = useRef({ ghost: 1, combo: 0, msg: "" });
 
@@ -78,7 +81,20 @@ export default function Hud({ game, muted, onToggleMute }: {
 
       if (bossWrap.current && bossFill.current) {
         bossWrap.current.style.opacity = hud.bossOn ? "1" : "0";
-        if (hud.bossOn) bossFill.current.style.transform = `scaleX(${Math.max(0, hud.bossHp / hud.bossMax)})`;
+        if (hud.bossOn) {
+          bossFill.current.style.transform = `scaleX(${Math.max(0, hud.bossHp / hud.bossMax)})`;
+          if (bossNameEl.current && bossNameEl.current.textContent !== hud.bossName) {
+            bossNameEl.current.textContent = hud.bossName;
+          }
+        }
+      }
+      if (ageWrap.current && ageEl.current) {
+        const flash = hud.ageFlash > 0;
+        ageWrap.current.style.opacity = flash ? "1" : "0.88";
+        ageWrap.current.style.transform = flash ? "scale(1.14)" : "scale(1)";
+        ageWrap.current.style.boxShadow = flash
+          ? "inset 0 0 0 1px rgba(255,210,63,0.9), 0 0 20px rgba(255,180,40,0.7)" : "";
+        ageEl.current.textContent = `AGE ${hud.age} · PWR ${hud.power}%`;
       }
 
       if (msgEl.current) {
@@ -181,6 +197,9 @@ export default function Hud({ game, muted, onToggleMute }: {
             <span ref={demoTxt} className="font-hud text-sm font-bold text-white">0</span>
           </div>
         </div>
+        <div ref={ageWrap} className="chip rounded-lg px-2.5 py-1 transition-all duration-300">
+          <span ref={ageEl} className="font-hud text-[11px] font-bold tracking-[0.18em] text-emerald-200">AGE 18 · PWR 100%</span>
+        </div>
       </div>
 
       {/* ---------- flight instruments ---------- */}
@@ -212,8 +231,8 @@ export default function Hud({ game, muted, onToggleMute }: {
         ref={bossWrap}
         className="absolute left-1/2 top-[max(3.4rem,env(safe-area-inset-top))] w-[min(440px,74vw)] -translate-x-1/2 opacity-0 transition-opacity duration-500"
       >
-        <div className="mb-1 text-center font-display text-sm tracking-[0.3em] text-[#ff8896] drop-shadow-[0_2px_6px_rgba(0,0,0,0.85)]">
-          NARRAK · VILTRUMITE WARLORD
+        <div ref={bossNameEl} className="mb-1 text-center font-display text-sm tracking-[0.3em] text-[#ff8896] drop-shadow-[0_2px_6px_rgba(0,0,0,0.85)]">
+          WARLORD
         </div>
         <div className="bar-shell bar-gloss h-[13px]">
           <div ref={bossFill} className="bar-fill" style={{ background: "linear-gradient(90deg,#ff2b3a,#ff7a5e)" }} />

@@ -185,6 +185,10 @@ export function HowTo({ onClose }: { onClose: () => void }) {
             desc="Fill the meter by fighting. Unleash for 8s of ×2 damage, more speed, twin bolts, bigger slams and halved incoming damage." />
           <Row icon={<Building2 size={20} />} keyCap="COLLATERAL" title="STRUCTURAL COLLAPSE"
             desc="Towers are stacks of individual floors that scorch and weaken under fire. Shear floors off and watch them fracture into concrete, rebar and glass — push a frame past critical and it groans, tilts, and pancakes floor-by-floor, leaving fires burning in the rubble." />
+          <Row icon={<Flame size={20} />} keyCap="GROWTH" title="VILTRUMITE AGING"
+            desc="Mark grows stronger with age. Every wave you clear ages him a year (+3 for a warlord): permanent +damage, +speed, +health and faster cooldowns — and your age is SAVED between runs. Fight on, grow on." />
+          <Row icon={<Skull size={20} />} keyCap="WARLORDS" title="THREE BOSS FIGHTS"
+            desc="Every 5th wave a named warlord hunts you — proactively, wherever you are: KURGAN THE SLEDGE chains rush-punches and ground slams; THRAXA THE BLADE orbit-strafes and blink-slashes in violet streaks; LORD CONQUEST bombards, summons drones and calls judgement strikes on your position (watch the ground rings). Each enrages below 40% health." />
           <Row icon={<Shield size={20} />} keyCap="SURVIVE" title="THE ARMADA"
             desc="Drones snipe, seekers kamikaze, raptors slash past at full burn, gunships bombard, siege mechs charge heavy cannon and bombers flatten whole blocks unless you intercept them. Every 5th wave a Viltrumite warlord arrives — he flies, dash-punches and ground-slams whole blocks." />
         </div>

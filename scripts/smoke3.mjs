@@ -171,7 +171,10 @@ const target2 = await farTall();
 const bombDropped = await evalEngine((t) => {
   const e = window.__engine;
   const V = e.rig.group.position.constructor;
+  // a stick of 3 bombs across the block, like a real bombing run
   e.dropBomb(new V(t.x, t.top + 8, t.z), new V(0, -4, 0));
+  e.dropBomb(new V(t.x + 12, t.top + 14, t.z + 6), new V(0, -4, 0));
+  e.dropBomb(new V(t.x - 10, t.top + 20, t.z - 8), new V(0, -4, 0));
   return true;
 }, target2);
 const bomb = await poll(() => evalEngine((d0) => window.__engine.city.demolished > d0 ? { d: window.__engine.city.demolished } : null, demoB), 150000);
