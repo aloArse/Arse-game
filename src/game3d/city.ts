@@ -747,6 +747,64 @@ export class City {
   }
 
   /** carve a tunnel through whatever the hero smashes into */
+  /**
+   * LOCALIZED impact destruction: only the slabs actually touched by the
+   * impact volume shatter — a fist-sized crater, not a whole-building hit.
+   * The building only comes down when structural integrity actually fails
+   * (too many floors lost / core floors gone / hp depleted) — then the
+   * existing pancake-collapse physics takes over.
+   * Returns the number of slabs destroyed.
+   */
+  gouge(point: THREE.Vector3, radius: number, fx: FX, power = 24, maxSlabs = 5): number {
+    const tmp = this.scratchC;
+    this.nearby(point.x, point.z, tmp);
+    let destroyed = 0;
+    for (const b of tmp) {
+      if (!b.alive) continue;
+      const total = b.slabs.length;
+      let broke = 0;
+      for (const i of b.slabs) {
+        if (destroyed + broke >= maxSlabs) break;
+        const s = this.slabs[i];
+        if (!s.alive || s.falling) continue;
+        const dx = Math.abs(s.p.x - point.x) - s.s.x / 2;
+        const dy = Math.abs(s.p.y - point.y) - s.s.y / 2;
+        const dz = Math.abs(s.p.z - point.z) - s.s.z / 2;
+        const d = Math.hypot(Math.max(0, dx), Math.max(0, dy), Math.max(0, dz));
+        if (d < radius) {
+          this.breakSlab(i, fx, point.x, point.y, point.z, power);
+          broke++;
+        }
+      }
+      if (broke > 0) {
+        destroyed += broke;
+        // structural cost proportional to how much of the frame was lost
+        b.hp -= (broke / total) * b.maxHp * 1.25;
+        b.top = this.computeTop(b);
+        this.slabDirty = true;
+        // material blasted out of the exact contact point
+        fx.spark(point.x, point.y, point.z, 0xffd9a0, 14, 18, 0.4, 0.35, -16, 0.8);
+        fx.spark(point.x, point.y, point.z, 0xbfe6ff, 10, 20, 0.24, 0.5, -12, 1);
+        fx.chunk(point.x, point.y, point.z, 0xb9b2a6, 6, 14, 0.8, 1.4);
+        fx.smoke(point.x, point.y, point.z, 4, 5, 2.4, 0xa99c9c, 1.6);
+        // integrity check: did the frame lose too much?
+        let alive = 0, baseAlive = 0;
+        for (const i of b.slabs) {
+          const s = this.slabs[i];
+          if (!s.alive || s.falling) continue;
+          alive++;
+          if (s.idx <= 1) baseAlive++;
+        }
+        const lostFrac = 1 - alive / total;
+        const baseGone = b.slabs.length > 3 && baseAlive === 0;
+        if (b.hp <= 0 || lostFrac > 0.42 || baseGone) {
+          this.collapse(b, point, fx);
+        }
+      }
+    }
+    return destroyed;
+  }
+
   smashThrough(p: THREE.Vector3, radius: number, fx: FX, power: number): number {
     let hits = 0;
     const tmp = this.scratchC;

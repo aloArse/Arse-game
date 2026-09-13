@@ -1,14 +1,14 @@
 // ---------- Unified input: keyboard + touch joystick + buttons (3D) ----------
 
-export type TapName = "strike" | "dash" | "slam" | "cyclone" | "over" | "grab" | "pause";
+export type TapName = "strike" | "dash" | "slam" | "cyclone" | "over" | "grab" | "bolt" | "pause";
 
-const taps: Record<TapName, number> = { strike: 0, dash: 0, slam: 0, cyclone: 0, over: 0, grab: 0, pause: 0 };
+const taps: Record<TapName, number> = { strike: 0, dash: 0, slam: 0, cyclone: 0, over: 0, grab: 0, bolt: 0, pause: 0 };
 
 /** held buttons (keyboard) */
-export const hold = { blast: false, strike: false, up: false, down: false, block: false };
+export const hold = { blast: false, strike: false, up: false, down: false, block: false, vision: false };
 
 /** held buttons (touch) — kept separate so key repaints can't clobber them */
-export const touch = { up: false, down: false, blast: false, strike: false, block: false };
+export const touch = { up: false, down: false, blast: false, strike: false, block: false, vision: false };
 
 /** digital keyboard move axis */
 export const kb = { x: 0, y: 0 };
@@ -25,8 +25,8 @@ export function take(n: TapName): boolean {
 
 export function clearAll(): void {
   (Object.keys(taps) as TapName[]).forEach((k) => { taps[k] = 0; });
-  hold.blast = false; hold.strike = false; hold.up = false; hold.down = false; hold.block = false;
-  touch.up = false; touch.down = false; touch.blast = false; touch.strike = false; touch.block = false;
+  hold.blast = false; hold.strike = false; hold.up = false; hold.down = false; hold.block = false; hold.vision = false;
+  touch.up = false; touch.down = false; touch.blast = false; touch.strike = false; touch.block = false; touch.vision = false;
   kb.x = 0; kb.y = 0;
   pad.x = 0; pad.y = 0; pad.mag = 0; pad.active = false;
   for (const k in keys) delete keys[k];
@@ -68,6 +68,7 @@ export function vertAxis(): number {
 export function holdStrike(): boolean { return hold.strike || touch.strike; }
 export function holdBlast(): boolean { return hold.blast || touch.blast; }
 export function holdBlock(): boolean { return hold.block || touch.block; }
+export function holdVision(): boolean { return hold.vision || touch.vision; }
 
 const keys: Record<string, boolean> = {};
 
@@ -101,6 +102,8 @@ export function installKeyboard(): void {
       case "KeyH": case "KeyF": tap("cyclone"); break;
       case "KeyB": case "KeyE": hold.block = true; break;
       case "KeyG": tap("grab"); break;
+      case "KeyV": hold.vision = true; break;
+      case "KeyT": tap("bolt"); break;
       case "KeyI": case "KeyU": tap("over"); break;
       case "KeyP": case "Escape": tap("pause"); break;
     }
@@ -112,11 +115,12 @@ export function installKeyboard(): void {
     if (e.code === "KeyJ") hold.strike = false;
     if (e.code === "KeyK") hold.blast = false;
     if (e.code === "KeyB" || e.code === "KeyE") hold.block = false;
+    if (e.code === "KeyV") hold.vision = false;
   });
 
   window.addEventListener("blur", () => {
     for (const k in keys) keys[k] = false;
     recompute();
-    hold.blast = false; hold.strike = false; hold.block = false;
+    hold.blast = false; hold.strike = false; hold.block = false; hold.vision = false;
   });
 }

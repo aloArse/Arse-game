@@ -5,7 +5,7 @@ import { City, CITY_HALF } from "./city";
 import { Rig, POSES, HERO_PAL } from "./character";
 import { Enemies, BOSS_TYPES, type EKind, type Enemy } from "./enemies";
 import { audio } from "../game/audio";
-import { installKeyboard, moveAxis, vertAxis, holdStrike, holdBlast, holdBlock, take, clearAll } from "../game/input";
+import { installKeyboard, moveAxis, vertAxis, holdStrike, holdBlast, holdBlock, holdVision, take, clearAll } from "../game/input";
 import { makeHud, type HudState, type RunStats } from "../game/types";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
@@ -21,9 +21,10 @@ function lerpAngle(a: number, b: number, t: number): number {
   return a + d * t;
 }
 
-const CD_STRIKE = 0.36, CD_BLAST = 0.16, CD_DASH = 2.2, CD_SLAM = 6.5, CD_CYCLONE = 5.5;
+const CD_STRIKE = 0.36, CD_BLAST = 0.16, CD_DASH = 2.2, CD_SLAM = 6.5, CD_CYCLONE = 5.5, CD_BOLT = 9;
 const EN_BLAST = 4, EN_DASH = 12, EN_SLAM = 32, EN_CYCLONE = 18;
 const MAX_ALT = 430;
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
 const BOUND = CITY_HALF + 150;
 
 interface Shot {
@@ -67,7 +68,7 @@ export class Engine {
   private sunLight!: THREE.DirectionalLight;
   private heroLight!: THREE.PointLight;
   private shield!: THREE.Mesh;
-  private clouds: THREE.Mesh[] = [];
+  private clouds: (THREE.Mesh | THREE.Sprite)[] = [];
 
   // --- systems ---
   fx: FX;
@@ -107,12 +108,12 @@ export class Engine {
   private grabbed: Enemy | null = null;
   private grabT = 0; private throwT = 0;
   private slamT = 0;
-  private slamPhase: "none" | "rise" | "dive" | "pdRise" | "pdDive" = "none";
+  private slamPhase: "none" | "rise" | "dive" | "pdRise" | "pdDive" | "stomp" = "none";
   private dashT = 0; private dashDir = new THREE.Vector3(0, 0, 1); private dashId = 0;
   private cycloneT = 0; private cycloneHitT = 0; private cycloneSpin = 0;
   private blockT = 0;
   private flurryOn = false;
-  private cd = { strike: 0, blast: 0, dash: 0, slam: 0, cyclone: 0 };
+  private cd = { strike: 0, blast: 0, dash: 0, slam: 0, cyclone: 0, bolt: 0 };
   private heroDead = false; private deadT = 0;
 
   // camera rig
@@ -137,6 +138,14 @@ export class Engine {
   private lastIntensity = -1;
   private judgementMarks: { x: number; z: number; t: number; dur: number; pulse: number }[] = [];
   private heartT = 0;
+  /* ground locomotion */
+  private grounded = false;
+  private walkT = 0;
+  /* atomic vision beam */
+  private visionT = 0;
+  private beam: THREE.Group | null = null;
+  /* 4th-hit spin */
+  private spinT = 0;
   private spawnT = 0; private betweenT = 0;
   private kills = 0; private score = 0; private combo = 0; private comboT = 0;
   private maxCombo = 0; private runTime = 0;
@@ -150,6 +159,7 @@ export class Engine {
   // scratch
   private _v = new THREE.Vector3();
   private _v2 = new THREE.Vector3();
+  private _v3 = new THREE.Vector3();
   private _push = new THREE.Vector3();
   private _fwd = new THREE.Vector3();
   private _right = new THREE.Vector3();
@@ -246,15 +256,31 @@ export class Engine {
         uniform vec3 top; uniform vec3 mid; uniform vec3 bot;
         uniform vec3 sunDir; uniform vec3 sunCol;
         varying vec3 vW;
+        float hash(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
         void main() {
           vec3 d = normalize(vW);
           float h = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
           vec3 c = mix(bot, mid, smoothstep(0.42, 0.56, h));
           c = mix(c, top, smoothstep(0.54, 0.96, h));
+          // horizon haze band — city glow trapped in the smog layer
+          float haze = exp(-abs(d.y) * 9.0);
+          c += vec3(0.34, 0.16, 0.10) * haze * 0.55;
+          // sun: disc + tight corona + wide glow + warm scatter
           float s = max(0.0, dot(d, normalize(sunDir)));
-          c += sunCol * pow(s, 220.0) * 3.2;
-          c += sunCol * pow(s, 8.0) * 0.42;
+          c += sunCol * smoothstep(0.9992, 0.9997, s) * 5.0;
+          c += sunCol * pow(s, 340.0) * 3.4;
+          c += sunCol * pow(s, 22.0) * 0.55;
+          c += sunCol * pow(s, 7.0) * 0.30;
           c += vec3(0.9, 0.5, 0.35) * pow(s, 2.0) * 0.13;
+          // stars, faint near the horizon and bright at the zenith
+          float zen = smoothstep(0.35, 0.9, d.y);
+          vec2 sp = d.xz / max(0.08, d.y + 0.35) * 46.0;
+          vec2 cell = floor(sp);
+          float star = step(0.9975, hash(cell));
+          float tw = 0.6 + 0.4 * hash(cell + 7.0);
+          c += vec3(0.9, 0.94, 1.0) * star * tw * zen * (0.55 + 0.45 * pow(s, 3.0) * -1.0 + 0.45);
           gl_FragColor = vec4(c, 1.0);
         }
       `,
@@ -263,46 +289,121 @@ export class Engine {
     this.sky.frustumCulled = false;
     this.scene.add(this.sky);
 
-    // high cloud decks
+    // three scrolling cloud decks at different altitudes/speeds
     const tex = this.cloudTexture();
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 3; i++) {
       const m = new THREE.Mesh(
-        new THREE.PlaneGeometry(4200, 4200),
+        new THREE.PlaneGeometry(4400, 4400),
         new THREE.MeshBasicMaterial({
-          map: tex, transparent: true, opacity: i === 0 ? 0.5 : 0.32,
+          map: tex.clone(), transparent: true, opacity: [0.55, 0.38, 0.24][i],
           depthWrite: false, fog: false, side: THREE.DoubleSide,
         }),
       );
+      (m.material as THREE.MeshBasicMaterial).map!.wrapS = (m.material as THREE.MeshBasicMaterial).map!.wrapT = THREE.RepeatWrapping;
+      (m.material as THREE.MeshBasicMaterial).map!.repeat.set(2 + i, 2 + i);
+      (m.material as THREE.MeshBasicMaterial).map!.needsUpdate = true;
       m.rotation.x = -Math.PI / 2;
-      m.position.y = 330 + i * 165;
+      m.rotation.z = i * 1.9;
+      m.position.y = [300, 392, 520][i];
       m.renderOrder = -1;
       this.clouds.push(m);
       this.scene.add(m);
     }
+    // volumetric-feel cloud banks dotted around the skyline (camera-facing sprites)
+    const bankMat = (op: number) => new THREE.SpriteMaterial({
+      map: tex, transparent: true, opacity: op, depthWrite: false, fog: false,
+      color: 0xf4ecff,
+    });
+    for (let i = 0; i < 14; i++) {
+      const s = new THREE.Sprite(bankMat(0.26 + Math.random() * 0.18));
+      const a = (i / 14) * Math.PI * 2 + Math.random() * 0.5;
+      const r = 700 + Math.random() * 1100;
+      s.position.set(Math.cos(a) * r, 210 + Math.random() * 230, Math.sin(a) * r);
+      const sc = 380 + Math.random() * 420;
+      s.scale.set(sc, sc * (0.36 + Math.random() * 0.2), 1);
+      s.renderOrder = -1;
+      this.clouds.push(s);
+      this.scene.add(s);
+    }
+    // sun glow sprite on the light direction
+    const sunMat = new THREE.SpriteMaterial({
+      transparent: true, opacity: 0.9, depthWrite: false, fog: false,
+      color: 0xffd9a0,
+    });
+    // radial glow canvas
+    {
+      const c = document.createElement("canvas");
+      c.width = c.height = 128;
+      const g2 = c.getContext("2d")!;
+      const grd = g2.createRadialGradient(64, 64, 0, 64, 64, 64);
+      grd.addColorStop(0, "rgba(255,255,255,1)");
+      grd.addColorStop(0.18, "rgba(255,235,200,0.75)");
+      grd.addColorStop(0.5, "rgba(255,200,140,0.22)");
+      grd.addColorStop(1, "rgba(255,180,120,0)");
+      g2.fillStyle = grd;
+      g2.fillRect(0, 0, 128, 128);
+      const st = new THREE.CanvasTexture(c);
+      st.colorSpace = THREE.SRGBColorSpace;
+      sunMat.map = st;
+    }
+    const sun = new THREE.Sprite(sunMat);
+    sun.position.copy(sunDir).multiplyScalar(2200);
+    sun.scale.set(900, 900, 1);
+    sun.renderOrder = -1;
+    this.clouds.push(sun);
+    this.scene.add(sun);
   }
 
   private cloudTexture(): THREE.CanvasTexture {
+    // layered puff clusters: bright cores, warm undersides, wispy fringes
     const c = document.createElement("canvas");
-    c.width = c.height = 512;
+    c.width = c.height = 1024;
     const g = c.getContext("2d")!;
-    g.clearRect(0, 0, 512, 512);
-    for (let i = 0; i < 46; i++) {
-      const x = Math.random() * 512;
-      const y = Math.random() * 512;
-      const r = 26 + Math.random() * 82;
-      const grd = g.createRadialGradient(x, y, 0, x, y, r);
-      const warm = Math.random() > 0.5;
-      grd.addColorStop(0, warm ? "rgba(255,215,185,0.5)" : "rgba(215,205,240,0.42)");
-      grd.addColorStop(0.55, warm ? "rgba(245,190,170,0.2)" : "rgba(190,185,225,0.17)");
+    g.clearRect(0, 0, 1024, 1024);
+    const puff = (x: number, y: number, r: number, core: string, mid: string) => {
+      const grd = g.createRadialGradient(x, y - r * 0.12, r * 0.05, x, y, r);
+      grd.addColorStop(0, core);
+      grd.addColorStop(0.45, mid);
       grd.addColorStop(1, "rgba(255,255,255,0)");
       g.fillStyle = grd;
       g.beginPath();
       g.arc(x, y, r, 0, Math.PI * 2);
       g.fill();
+    };
+    // 26 big cloud banks, each a cluster of 5-9 puffs
+    for (let i = 0; i < 26; i++) {
+      const bx = Math.random() * 1024;
+      const by = Math.random() * 1024;
+      const scale = 46 + Math.random() * 90;
+      const warm = Math.random() > 0.45;
+      const core = warm ? "rgba(255,222,195,0.55)" : "rgba(226,222,248,0.5)";
+      const mid = warm ? "rgba(238,180,160,0.2)" : "rgba(178,174,222,0.16)";
+      const n = 5 + (Math.random() * 5 | 0);
+      for (let p = 0; p < n; p++) {
+        const a = Math.random() * Math.PI * 2;
+        const d = Math.random() * scale * 1.15;
+        puff(bx + Math.cos(a) * d, by + Math.sin(a) * d * 0.6, scale * (0.35 + Math.random() * 0.6), core, mid);
+      }
+      // top highlight
+      puff(bx, by - scale * 0.4, scale * 0.5, "rgba(255,255,255,0.34)", "rgba(255,240,230,0.1)");
     }
+    // thin cirrus streaks
+    g.globalAlpha = 0.12;
+    for (let i = 0; i < 22; i++) {
+      const y = Math.random() * 1024;
+      g.strokeStyle = Math.random() > 0.5 ? "#ffe9d8" : "#d8d4f2";
+      g.lineWidth = 2 + Math.random() * 5;
+      g.beginPath();
+      const x0 = Math.random() * 1024;
+      g.moveTo(x0, y);
+      g.bezierCurveTo(x0 + 90, y - 14, x0 + 200, y + 12, x0 + 320 + Math.random() * 200, y - 6);
+      g.stroke();
+    }
+    g.globalAlpha = 1;
     const t = new THREE.CanvasTexture(c);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.repeat.set(3, 3);
+    t.colorSpace = THREE.SRGBColorSpace;
     return t;
   }
 
@@ -478,7 +579,7 @@ export class Engine {
     this.dashT = 0; this.dashId = 0;
     this.cycloneT = 0; this.cycloneHitT = 0; this.cycloneSpin = 0;
     this.blockT = 0; this.flurryOn = false;
-    this.cd = { strike: 0, blast: 0, dash: 0, slam: 0, cyclone: 0 };
+    this.cd = { strike: 0, blast: 0, dash: 0, slam: 0, cyclone: 0, bolt: 0 };
     this.heroDead = false; this.deadT = 0;
     this.rig.group.visible = true;
     this.rig.setPoseImmediate(POSES.hover);
@@ -550,13 +651,16 @@ export class Engine {
     this.sky.position.copy(this.camera.position);
     for (let i = 0; i < this.clouds.length; i++) {
       const c = this.clouds[i];
-      const m = c.material as THREE.MeshBasicMaterial;
-      if (m.map) {
-        m.map.offset.x += dt * (0.0035 + i * 0.0022);
-        m.map.offset.y += dt * 0.0011;
+      // only the big deck planes scroll; sprites + sun stay world-fixed
+      if ((c as THREE.Mesh).isMesh) {
+        const m = c.material as THREE.MeshBasicMaterial;
+        if (m.map) {
+          m.map.offset.x += dt * (0.0035 + i * 0.0018);
+          m.map.offset.y += dt * 0.0009;
+        }
+        c.position.x = this.camera.position.x;
+        c.position.z = this.camera.position.z;
       }
-      c.position.x = this.camera.position.x;
-      c.position.z = this.camera.position.z;
     }
   }
 
@@ -734,6 +838,7 @@ export class Engine {
     this.cd.dash = Math.max(0, this.cd.dash - dt);
     this.cd.slam = Math.max(0, this.cd.slam - dt);
     this.cd.cyclone = Math.max(0, this.cd.cyclone - dt);
+    this.cd.bolt = Math.max(0, this.cd.bolt - dt);
 
     const od = this.odT > 0;
     if (od) {
@@ -781,14 +886,27 @@ export class Engine {
     }
 
     // ---- abilities ----
-    if (this.cd.strike <= 0 && this.slamPhase === "none" && this.cycloneT <= 0 && (holdStrike() || take("strike"))) this.doStrike();
+    if (this.cd.strike <= 0 && this.slamPhase === "none" && this.cycloneT <= 0 && (holdStrike() || take("strike"))) {
+      take("strike"); // consume any lingering tap so one press can never double-fire
+      this.doStrike();
+    }
     if (holdBlast() && this.cd.blast <= 0 && this.en >= EN_BLAST && this.slamPhase === "none" && this.dashT <= 0 && this.cycloneT <= 0) this.doBlast();
     if (this.cd.dash <= 0 && this.en >= EN_DASH && this.slamPhase === "none" && this.cycloneT <= 0 && take("dash")) this.doDash();
     if (this.slamPhase === "none" && this.cycloneT <= 0 && take("slam")) {
       if (this.grabbed) this.startPiledrive();
+      else if (this.grounded && this.cd.slam <= 0 && this.en >= EN_SLAM * 0.6) this.startStomp();
       else if (this.cd.slam <= 0 && this.en >= EN_SLAM) this.startSlam();
     }
     if (this.cd.cyclone <= 0 && this.en >= EN_CYCLONE && this.slamPhase === "none" && this.cycloneT <= 0 && this.dashT <= 0 && !this.grabbed && take("cyclone")) this.doCyclone();
+    if (this.cd.bolt <= 0 && this.slamPhase === "none" && this.cycloneT <= 0 && this.dashT <= 0 && take("bolt")) this.doBoltStrike();
+    // ---- atomic vision: hold to fire a melting beam from the eyes ----
+    if (holdVision() && this.en > 2 && this.slamPhase === "none" && this.cycloneT <= 0 && this.dashT <= 0) {
+      this.en = Math.max(0, this.en - 23 * dt);
+      this.updateVision(dt);
+    } else if (this.beam) {
+      this.beam.visible = false;
+      this.visionT = 0;
+    }
     if (take("grab") && this.slamPhase === "none" && this.cycloneT <= 0) this.doGrabOrClap();
     if (this.od >= 100 && this.odT <= 0 && take("over")) this.triggerOverdrive();
     if (this.od >= 100 && this.odT <= 0 && !this.odAnnounced) {
@@ -809,6 +927,18 @@ export class Engine {
       this.updateCyclone(dt);
     } else if (this.slamPhase !== "none") {
       this.updateSlam(dt);
+    } else if (this.grounded) {
+      // ---- ground locomotion: walk / run ----
+      const run = mv.mag > 0.82;
+      const gSpd = (run ? 23 : 15) * this.speedMult();
+      this._v2.copy(this._v).multiplyScalar(gSpd);
+      this._v2.y = 0;
+      const k = 1 - Math.exp(-7.5 * dt);
+      this.vel.x = lerp(this.vel.x, this._v2.x, k);
+      this.vel.z = lerp(this.vel.z, this._v2.z, k);
+      this.vel.y = 0;
+      // punch lunge (shorter on foot)
+      if (this.punchT > 0) this.vel.addScaledVector(this._aim, 34 * dt * 10 * this.punchT);
     } else {
       // horizontal thrust
       this._v2.copy(this._v).multiplyScalar(maxSpd);
@@ -832,15 +962,39 @@ export class Engine {
     // ---- city collision / smash-through ----
     this.resolveCityCollision(dt);
 
-    // ---- ground ----
-    if (this.pos.y < 1.4) {
-      this.pos.y = 1.4;
-      if (this.vel.y < -34) {
-        this.groundImpact();
+    // ---- ground / walking mode ----
+    {
+      const surf = this.city.surfaceY(this.pos.x, this.pos.z);
+      const footY = surf + 1.15;
+      if (this.pos.y <= footY + 0.25 && this.vel.y <= 10 && this.slamPhase === "none") {
+        const fallSpd = this.vel.y;
+        const wasAir = !this.grounded;
+        if (this.pos.y < footY) this.pos.y = footY;
+        this.vel.y = 0;
+        this.grounded = true;
+        if (wasAir && fallSpd < -34) this.groundImpact();
+        // ground friction
+        this.vel.x *= Math.exp(-3.2 * dt);
+        this.vel.z *= Math.exp(-3.2 * dt);
+      } else if (this.pos.y > footY + 0.5) {
+        this.grounded = false;
       }
-      this.vel.y = Math.max(0, this.vel.y * -0.15);
-      this.vel.x *= Math.exp(-2.4 * dt);
-      this.vel.z *= Math.exp(-2.4 * dt);
+      if (this.grounded) {
+        if (vert > 0.3 && this.slamPhase === "none") {
+          // take off!
+          this.grounded = false;
+          this.vel.y = 36;
+          audio.play("dash", 0.45);
+          this.fx.ring(this.pos.x, this.pos.y - 1, this.pos.z, 0xbfe0ff, 9, 0.4, true, 1.4);
+          this.fx.smoke(this.pos.x, this.pos.y - 1, this.pos.z, 6, 8, 2.4, 0xa89ca0, 1.4);
+        } else {
+          const spd = Math.hypot(this.vel.x, this.vel.z);
+          this.walkT += dt * (5 + spd * 0.62);
+          if (spd > 4 && Math.random() < dt * spd * 0.14) {
+            this.fx.smoke(this.pos.x, this.pos.y - 1, this.pos.z, 1, 2.4, 1.1, 0x9a9098, 0.9);
+          }
+        }
+      }
     }
 
     // ---- regen ----
@@ -940,9 +1094,14 @@ export class Engine {
       wantYaw = Math.atan2(this._aim.x, this._aim.z);
     }
     this.yaw = lerpAngle(this.yaw, wantYaw, 1 - Math.exp(-9 * dt));
+    // spin backfist whirl
+    if (this.spinT > 0) {
+      this.spinT = Math.max(0, this.spinT - dt);
+      this.yaw += dt * 24;
+    }
 
     // flight blend + banking
-    const targetFly = this.dashT > 0 ? 1 : clamp((speed - 14) / 46, 0, 1);
+    const targetFly = this.grounded ? 0 : this.dashT > 0 ? 1 : clamp((speed - 14) / 46, 0, 1);
     this.flyK = lerp(this.flyK, targetFly, 1 - Math.exp(-6 * dt));
 
     // ---- base locomotion pose ----
@@ -962,6 +1121,12 @@ export class Engine {
     else if (this.hurtT > 0) { pose = POSES.hurt; blend = 12; }
     else if (this.flyK > 0.55) { pose = this.cruise > 0.5 ? POSES.fist : POSES.fly; blend = 7; }
     else if (this.flyK > 0.12) { pose = POSES.fly; blend = 6; }
+    else if (this.grounded) {
+      // on foot: procedural walk/run cycle or combat stance
+      const gSpd = Math.hypot(this.vel.x, this.vel.z);
+      pose = gSpd > 1.2 ? this.rig.walkPose(this.walkT, clamp(gSpd / 23, 0.25, 1)) : POSES.stand;
+      blend = 11;
+    }
     else { pose = (moveMag > 0.05 || Math.abs(vert) > 0.05 || threatNear) ? POSES.idleFight : POSES.idle; blend = 5; }
 
     this.rig.blendPose(pose, Math.min(1, dt * blend));
@@ -987,7 +1152,7 @@ export class Engine {
     this.rig.updateClip(dt);
 
     // body pitch: upright hovering → horizontal at speed, plus climb/dive angle
-    const climb = clamp(this.vel.y / 55, -1, 1);
+    const climb = this.grounded ? 0 : clamp(this.vel.y / 55, -1, 1);
     const pitchTarget =
       this.slamPhase === "dive" || this.slamPhase === "pdDive" ? 0.2 :
         this.slamPhase === "rise" || this.slamPhase === "pdRise" ? -0.35 :
@@ -1140,7 +1305,7 @@ export class Engine {
         if (b) {
           hitAny = true;
           const before = this.city.demolished;
-          this.city.damage(b, 34 * (od ? 1.8 : 1), hitPos, this.fx, 18);
+          this.city.gouge(hitPos, 2.2, this.fx, 20, 2);
           if (this.city.demolished > before) this.onDemolish();
         }
         if (hitAny) {
@@ -1157,11 +1322,48 @@ export class Engine {
       this.flurryOn = false;
     }
 
-    // ---- regular chain ----
+    // ---- regular chain (jab → cross → uppercut → SPIN BACKFIST) ----
     const step = this.comboStep;
     const finisher = step === 2;
-    this.comboStep = (step + 1) % 3;
+    const spin = step === 3;
+    this.comboStep = (step + 1) % 4;
     this.comboWindow = 0.85;
+    if (spin) {
+      // whirling backfist: 360° sweep that clears everything around you
+      this.spinT = 0.3;
+      this.punchT = 0.3;
+      this.rig.playClip("cross", od ? 1.5 : 1.25);
+      const dmg = (od ? 130 : 84);
+      let hitAny = false;
+      for (const e of this.enemies.list) {
+        if (e.dead || e.grabbed) continue;
+        const d = e.obj.position.distanceTo(this.pos);
+        if (d < e.r + 7) {
+          hitAny = true;
+          this.damageEnemy(e, dmg, true);
+          this._v2.subVectors(e.obj.position, this.pos).normalize();
+          e.v.addScaledVector(this._v2, e.kind === "boss" ? 26 : 88);
+          e.v.y += e.kind === "boss" ? 10 : 46;
+        }
+      }
+      const b = this.city.collide(this._v.copy(this.pos).addScaledVector(this._aim, 2.6), 3.2, this._push);
+      if (b) {
+        hitAny = true;
+        const before = this.city.demolished;
+        this.city.gouge(this._v.clone(), 3.6, this.fx, 34, 5);
+        if (this.city.demolished > before) this.onDemolish();
+      }
+      if (hitAny) {
+        this.stopT = Math.max(this.stopT, 0.12);
+        this.shake = Math.max(this.shake, 11);
+        this.fx.flash(this.pos.x, this.pos.y, this.pos.z, 0xffe0a0, 6.5, 0.24);
+        this.fx.ring(this.pos.x, this.pos.y, this.pos.z, 0xffd23f, 13, 0.4, false, 1.6);
+        audio.play("punch", 1.4);
+        navigator.vibrate?.(18);
+      }
+      this.cd.strike = this.cdOf(CD_STRIKE) * (od ? 0.72 : 1) * 2.2;
+      return;
+    }
 
     this.cd.strike = this.cdOf(finisher ? CD_STRIKE * 1.8 : CD_STRIKE) * (od ? 0.72 : 1);
     this.punchT = finisher ? 0.34 : 0.24;
@@ -1198,12 +1400,12 @@ export class Engine {
       }
     }
 
-    // punch buildings
+    // punch buildings — only the contact point shatters
     const b = this.city.collide(hitPos, finisher ? 3.4 : 2.6, this._push);
     if (b) {
       hitAny = true;
       const before = this.city.demolished;
-      this.city.damage(b, (finisher ? 190 : 76) * (od ? 1.8 : 1), hitPos, this.fx, finisher ? 40 : 26);
+      this.city.gouge(hitPos, finisher ? 3.6 : 2.6, this.fx, finisher ? 36 : 26, finisher ? 6 : 4);
       if (this.city.demolished > before) this.onDemolish();
       this.vel.addScaledVector(this._aim, -12);
     }
@@ -1273,6 +1475,119 @@ export class Engine {
   }
 
   /* ---------- cyclone spin ---------- */
+
+  /** ATOMIC VISION — sustained eye beam that melts whatever it touches */
+  private updateVision(dt: number): void {
+    if (!this.beam) {
+      const g = new THREE.Group();
+      const mkCyl = (r: number, col: number, op: number) =>
+        new THREE.Mesh(
+          new THREE.CylinderGeometry(r, r, 1, 10, 1, true),
+          new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: op, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+        );
+      g.add(mkCyl(0.14, 0xffffff, 0.95), mkCyl(0.5, 0xffb054, 0.42));
+      g.visible = false;
+      g.frustumCulled = false;
+      this.scene.add(g);
+      this.beam = g;
+    }
+    this.visionT -= dt;
+    const origin = this._v3.copy(this.pos);
+    origin.y += 0.62;
+    origin.addScaledVector(this._aim, 0.6);
+    const dir = this._aim;
+    let len = 95;
+    const hitP = this._v2;
+    // march the ray
+    for (let t = 2; t < 95; t += 2.0) {
+      hitP.copy(origin).addScaledVector(dir, t);
+      let stop = false;
+      for (const e of this.enemies.list) {
+        if (e.dead || e.grabbed) continue;
+        if (e.obj.position.distanceTo(hitP) < e.r + 1.7) {
+          len = t;
+          this.damageEnemy(e, (this.odT > 0 ? 150 : 105) * dt, true);
+          if (this.visionT <= 0) {
+            this.visionT = 0.09;
+            this.fx.spark(hitP.x, hitP.y, hitP.z, 0xffc890, 8, 14, 0.4, 0.3, -4, 1);
+            this.fx.light(hitP.x, hitP.y, hitP.z, 0xffc060, 420, 0.14);
+          }
+          e.v.addScaledVector(dir, 260 * dt);
+          stop = true;
+          break;
+        }
+      }
+      if (stop) break;
+      const b = this.city.collide(hitP, 1.15, this._push);
+      if (b) {
+        len = t;
+        // melt a localized crater — only where the beam touches
+        if (this.visionT <= 0) {
+          this.visionT = 0.09;
+          this.city.gouge(hitP.clone(), 3.6, this.fx, 30, 3);
+        }
+        this.fx.jet(hitP.x, hitP.y, hitP.z, -dir.x, 0.6, -dir.z, 0xffd9a0, 3, 12, 0.9, 0.5, 0.4);
+        this.fx.light(hitP.x, hitP.y, hitP.z, 0xffc060, 520, 0.12);
+        break;
+      }
+    }
+    // beam mesh stretches from the eyes to the hit point
+    this.beam.visible = true;
+    this.beam.position.copy(origin).addScaledVector(dir, len / 2);
+    this.beam.quaternion.setFromUnitVectors(UP_AXIS, dir);
+    const flick = 0.72 + Math.random() * 0.28;
+    for (const c of this.beam.children) {
+      const m = (c as THREE.Mesh).material as THREE.MeshBasicMaterial;
+      m.opacity = (c === this.beam.children[0] ? 0.95 : 0.42) * flick;
+    }
+    this.beam.scale.set(1, len, 1);
+    this.rig.setEyeGlow(0xffffff, 4.5);
+    this.shake = Math.max(this.shake, 2.2);
+    if (Math.random() < dt * 7) audio.play("beam", 0.55);
+  }
+
+  /** THUNDER STRIKE — call forked lightning down on the aimed target */
+  private doBoltStrike(): void {
+    this.cd.bolt = this.cdOf(CD_BOLT);
+    const od = this.odT > 0;
+    let best: Enemy | null = null;
+    let bd = 85;
+    for (const e of this.enemies.list) {
+      if (e.dead || e.grabbed) continue;
+      this._v2.subVectors(e.obj.position, this.pos);
+      const d = this._v2.length();
+      if (d > 85) continue;
+      this._v2.normalize();
+      if (this._v2.dot(this._aim) < 0.3) continue;
+      if (d < bd) { bd = d; best = e; }
+    }
+    const target = new THREE.Vector3();
+    if (best) target.copy(best.obj.position);
+    else {
+      target.copy(this.pos).addScaledVector(this._aim, 55);
+      target.y = Math.max(1, this.city.surfaceY(target.x, target.z));
+    }
+    for (let i = 0; i < 3; i++) {
+      const ox = (Math.random() - 0.5) * 7;
+      const oz = (Math.random() - 0.5) * 7;
+      this.fx.bolt(target.x + ox, target.y + 110 - i * 7, target.z + oz, target.x, target.y + 1.5, target.z, 0xbfe6ff, 0.22 + i * 0.07);
+    }
+    this.fx.flash(target.x, target.y + 2, target.z, 0xdff0ff, 11, 0.3);
+    this.fx.light(target.x, target.y + 4, target.z, 0x9fd0ff, 1600, 0.4);
+    this.fx.shock(target.x, target.y + 0.5, target.z, 0xbfe6ff, 26, 0.55);
+    this.fx.spark(target.x, target.y + 1, target.z, 0xbfe6ff, 34, 28, 0.5, 0.55, -10, 1);
+    audio.play("zap", 1.7);
+    audio.play("boom", 0.6);
+    this.shake = Math.max(this.shake, 8);
+    for (const e of this.enemies.list) {
+      if (e.dead || e.grabbed) continue;
+      if (e.obj.position.distanceTo(target) < 7.5) {
+        this.damageEnemy(e, (od ? 230 : 155), true);
+        e.v.y += 34;
+      }
+    }
+    if (!best) this.city.gouge(target, 5.5, this.fx, 36, 6);
+  }
 
   private doCyclone(): void {
     const od = this.odT > 0;
@@ -1541,6 +1856,16 @@ export class Engine {
     navigator.vibrate?.(18);
   }
 
+  /** ground stomp — a shockwave that radiates out from where you stand */
+  private startStomp(): void {
+    this.en -= EN_SLAM * 0.6;
+    this.cd.slam = this.cdOf(CD_SLAM * 0.7);
+    this.slamPhase = "stomp";
+    this.slamT = 0.26;
+    this.iT = Math.max(this.iT, 0.3);
+    audio.play("warn", 0.5);
+  }
+
   private startSlam(): void {
     this.en -= EN_SLAM;
     this.cd.slam = this.cdOf(CD_SLAM);
@@ -1583,6 +1908,32 @@ export class Engine {
       if (this.pos.y <= surf + 2.2 || this.slamT <= 0) {
         this.pos.y = Math.max(surf + 1.4, this.pos.y);
         this.slamImpact();
+      }
+    } else if (this.slamPhase === "stomp") {
+      this.vel.y = 0;
+      this.fx.jet(this.pos.x, this.pos.y - 1, this.pos.z, 0, 1, 0, 0xffd23f, 3, 10, 0.8, 0.4, 0.3);
+      if (this.slamT <= 0) {
+        this.slamPhase = "none";
+        const p = this._v.copy(this.pos);
+        p.y = this.city.surfaceY(p.x, p.z) + 0.5;
+        const R = 30;
+        this.city.blast(p, R, (this.odT > 0 ? 260 : 170) * this.powerMult(), this.fx);
+        this.fx.shock(p.x, p.y, p.z, 0xffd23f, R * 1.5, 0.8);
+        this.fx.flash(p.x, p.y + 1, p.z, 0xffe0a0, 12, 0.4);
+        this.fx.chunk(p.x, p.y, p.z, 0xb9b2a6, 14, 20, 1.2, 1.5);
+        this.fx.light(p.x, p.y + 6, p.z, 0xffb054, 1300, 0.5);
+        for (const e of this.enemies.list) {
+          if (e.dead || e.grabbed) continue;
+          const d = e.obj.position.distanceTo(p);
+          if (d < R + 6) {
+            this.damageEnemy(e, (this.odT > 0 ? 120 : 80) * (1 - d / (R + 6)) + 20, true);
+            e.v.y += 56;
+          }
+        }
+        audio.play("slam", 1);
+        this.shake = Math.max(this.shake, 14);
+        navigator.vibrate?.(60);
+        this.groundImpact();
       }
     } else if (this.slamPhase === "pdRise") {
       this.vel.set(this.vel.x * 0.86, 88, this.vel.z * 0.86);
@@ -2299,8 +2650,9 @@ export class Engine {
       this.camYaw = lerpAngle(this.camYaw, this.yaw, 1 - Math.exp(-1.2 * raw));
     }
 
-    const back = 11 + clamp(speed * 0.075, 0, 8) + (this.dashT > 0 ? 3.5 : 0);
-    const up = 3.6 + clamp(speed * 0.012, 0, 2.4);
+    const portrait = this.camera.aspect < 1;
+    const back = 11 + clamp(speed * 0.075, 0, 8) + (this.dashT > 0 ? 3.5 : 0) + (portrait ? 5 : 0);
+    const up = 3.6 + clamp(speed * 0.012, 0, 2.4) + (portrait ? 1.8 : 0) + (this.grounded ? -1.2 : 0);
     this._fwd.set(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
 
     this.camPos.set(
@@ -2341,7 +2693,7 @@ export class Engine {
 
     // speed FOV + impact kick
     this.fovKick *= Math.exp(-5 * raw);
-    const fovT = 62 + clamp((speed - 30) / 140, 0, 1) * 26 + (this.dashT > 0 ? 8 : 0) + this.fovKick;
+    const fovT = (portrait ? 76 : 62) + clamp((speed - 30) / 140, 0, 1) * 26 + (this.dashT > 0 ? 8 : 0) + this.fovKick;
     this.camera.fov = lerp(this.camera.fov, fovT, 1 - Math.exp(-4 * raw));
     this.camera.updateProjectionMatrix();
   }
@@ -2379,6 +2731,7 @@ export class Engine {
     h.cds.dash = this.cd.dash;
     h.cds.slam = this.cd.slam;
     h.cds.cyclone = this.cd.cyclone;
+    h.cds.bolt = this.cd.bolt;
     h.blocking = this.blockT > 0.55;
     h.flurry = this.flurryOn;
     h.time = this.runTime;

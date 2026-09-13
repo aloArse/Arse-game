@@ -82,6 +82,13 @@ function suitTex(): THREE.CanvasTexture {
 /* ---------------- pose library ---------------- */
 
 export const POSES: Record<string, Pose> = {
+  stand: {
+    spine: [0.1, 0, 0], chest: [0.07, 0, 0], neck: [-0.04, 0, 0], head: [0, 0, 0],
+    shL: [-0.5, 0, 0.34], elL: [-0.72, 0, 0.1], wrL: [-0.2, 0, 0],
+    shR: [-0.5, 0, -0.34], elR: [-0.72, 0, -0.1], wrR: [-0.2, 0, 0],
+    hipL: [-0.06, 0, 0.06], kneeL: [0.12, 0, 0], ankL: [-0.06, 0, 0],
+    hipR: [-0.06, 0, -0.06], kneeR: [0.12, 0, 0], ankR: [-0.06, 0, 0],
+  },
   idle: {
     spine: [0.03, 0, 0], chest: [0.02, 0, 0], neck: [0, 0, 0], head: [0, 0, 0],
     shL: [-0.1, 0, 0.19], elL: [-0.26, 0, 0.04], wrL: [-0.1, 0, 0],
@@ -713,6 +720,19 @@ export class Rig {
       const delt = new THREE.Mesh(sphere(0.115), suit);
       delt.scale.set(1.05, 1.12, 1.05);
       sh.add(delt);
+      // armor pauldron — layered composite cap over the shoulder
+      const pauldron = new THREE.Mesh(sphere(0.128, 16, 12, ), suitDark);
+      pauldron.scale.set(1.08, 0.78, 1.1);
+      pauldron.position.y = 0.028;
+      sh.add(pauldron);
+      const pauldronLip = new THREE.Mesh(keep(new THREE.TorusGeometry(0.117, 0.016, 8, 20)), accent);
+      pauldronLip.rotation.x = Math.PI / 2;
+      pauldronLip.position.y = -0.048;
+      sh.add(pauldronLip);
+      const ridge = new THREE.Mesh(capsule(0.02, 0.16, 3, 8), accent);
+      ridge.position.set(0, 0.105, 0.02);
+      ridge.rotation.set(0.2, 0, sx * 0.55);
+      sh.add(ridge);
       // shoulder trim ring
       const trim = new THREE.Mesh(keep(new THREE.TorusGeometry(0.104, 0.017, 8, 18)), accent);
       trim.rotation.x = Math.PI / 2;
@@ -936,6 +956,41 @@ export class Rig {
       if (t) j.rotation.set(t[0], t[1], t[2]);
       else j.rotation.set(0, 0, 0);
     }
+  }
+
+  /**
+   * Procedural ground locomotion: a full walk/run cycle driven by phase.
+   * k = gait intensity (0 idle → 1 full sprint). Returns the pose to blend.
+   */
+  walkPose(phase: number, k: number): Pose {
+    const s = Math.sin(phase);
+    const c = Math.cos(phase);
+    const run = k;
+    const amp = 0.62 * run;
+    // legs: hips swing opposite; knee bends on the swing-through leg
+    const hipL = -s * amp;
+    const hipR = s * amp;
+    const kneeL = Math.max(0, -c * s) * 1.15 * run + 0.08;
+    const kneeR = Math.max(0, c * s) * 1.15 * run + 0.08;
+    return {
+      spine: [0.14 + run * 0.22, s * 0.06 * run, 0],
+      chest: [0.06 + run * 0.16, -s * 0.07 * run, 0],
+      neck: [-0.1 - run * 0.14, 0, 0],
+      head: [0.04, 0, 0],
+      // arms counter-swing, fists half-cocked
+      shL: [-0.42 - s * 0.52 * run, 0, 0.3],
+      elL: [-0.78 - Math.max(0, s) * 0.5 * run, 0, 0.08],
+      wrL: [-0.25, 0, 0],
+      shR: [-0.42 + s * 0.52 * run, 0, -0.3],
+      elR: [-0.78 - Math.max(0, -s) * 0.5 * run, 0, -0.08],
+      wrR: [-0.25, 0, 0],
+      hipL: [hipL, 0, 0.05],
+      kneeL: [kneeL, 0, 0],
+      ankL: [-hipL * 0.5 - 0.04, 0, 0],
+      hipR: [hipR, 0, -0.05],
+      kneeR: [kneeR, 0, 0],
+      ankR: [-hipR * 0.5 - 0.04, 0, 0],
+    };
   }
 
   blendPose(pose: Pose, k: number): void {

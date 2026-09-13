@@ -16,8 +16,8 @@ export interface HudState {
   bossMax: number;
   alt: number;           // altitude (m)
   spd: number;           // speed (km/h-ish)
-  cds: { strike: number; blast: number; dash: number; slam: number; cyclone: number };
-  cdMax: { strike: number; blast: number; dash: number; slam: number; cyclone: number };
+  cds: { strike: number; blast: number; dash: number; slam: number; cyclone: number; bolt: number };
+  cdMax: { strike: number; blast: number; dash: number; slam: number; cyclone: number; bolt: number };
   enCost: { blast: number; dash: number; slam: number; cyclone: number };
   blocking: boolean;     // hero is bracing
   flurry: boolean;       // hero is in barrage mode
@@ -48,8 +48,8 @@ export function makeHud(): HudState {
     kills: 0, demolished: 0,
     bossOn: false, bossHp: 0, bossMax: 1,
     alt: 0, spd: 0,
-    cds: { strike: 0, blast: 0, dash: 0, slam: 0, cyclone: 0 },
-    cdMax: { strike: 0.36, blast: 0.16, dash: 2.2, slam: 6.5, cyclone: 5.5 },
+    cds: { strike: 0, blast: 0, dash: 0, slam: 0, cyclone: 0, bolt: 0 },
+    cdMax: { strike: 0.36, blast: 0.16, dash: 2.2, slam: 6.5, cyclone: 5.5, bolt: 9 },
     enCost: { blast: 4, dash: 12, slam: 32, cyclone: 18 },
     blocking: false, flurry: false,
     age: 18, power: 100, ageFlash: 0, bossName: "",

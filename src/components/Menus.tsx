@@ -189,6 +189,16 @@ export function HowTo({ onClose }: { onClose: () => void }) {
             desc="Mark grows stronger with age. Every wave you clear ages him a year (+3 for a warlord): permanent +damage, +speed, +health and faster cooldowns — and your age is SAVED between runs. Fight on, grow on." />
           <Row icon={<Skull size={20} />} keyCap="WARLORDS" title="THREE BOSS FIGHTS"
             desc="Every 5th wave a named warlord hunts you — proactively, wherever you are: KURGAN THE SLEDGE chains rush-punches and ground slams; THRAXA THE BLADE orbit-strafes and blink-slashes in violet streaks; LORD CONQUEST bombards, summons drones and calls judgement strikes on your position (watch the ground rings). Each enrages below 40% health." />
+          <Row icon={<Move size={20} />} keyCap="LAND / WALK" title="GROUND MODE"
+            desc="Dive toward the street or a rooftop and touch down — Mark lands, then walks and SPRINTS on foot with a full run cycle. Press UP to launch back into the sky. On the ground, SLAM becomes a SEISMIC STOMP shockwave." />
+          <Row icon={<Flame size={20} />} keyCap="V (HOLD)" title="ATOMIC VISION"
+            desc="Hold to fire a searing beam from the eyes. It melts a crater exactly where it touches — carve lines through towers and burn enemies. Drains energy while active." />
+          <Row icon={<Zap size={20} />} keyCap="T" title="THUNDER STRIKE"
+            desc="Call forked lightning down on whatever you're aiming at. Instant heavy damage, a shockwave ring, and a scorched crater — works on enemies and buildings alike." />
+          <Row icon={<Hand size={20} />} keyCap="J ×4" title="SPIN BACKFIST"
+            desc="The strike chain now has a fourth hit: jab → cross → launching UPPERCUT → a whirling 360° BACKFIST that scatters everything around you." />
+          <Row icon={<Building2 size={20} />} keyCap="PRECISION" title="POINT-OF-IMPACT DAMAGE"
+            desc="Punches, vision beams and lightning now destroy ONLY the exact point of contact — punch clean holes through walls, carve towers letter-by-letter. A building only falls when it's actually critically damaged: then it groans, sags and pancakes floor-by-floor under real gravity." />
           <Row icon={<Shield size={20} />} keyCap="SURVIVE" title="THE ARMADA"
             desc="Drones snipe, seekers kamikaze, raptors slash past at full burn, gunships bombard, siege mechs charge heavy cannon and bombers flatten whole blocks unless you intercept them. Every 5th wave a Viltrumite warlord arrives — he flies, dash-punches and ground-slams whole blocks." />
         </div>
