@@ -5,22 +5,28 @@
 // need to change. Internally, instead of building ~80 primitive meshes, it loads the
 // uploaded glTF character and drives its real skeleton bones.
 //
-// How the retargeting works (no per-bone axis guessing needed):
+// How the retargeting works:
 //   The game's whole animation system (POSES / CLIPS / walkPose / addFlutter, all in
-//   character.ts) works by lerping plain Euler (x,y,z) values per joint. The procedural
-//   rig could apply those numbers directly because its joints start at identity rotation.
-//   This model's bones do NOT start at identity (they carry the rig's authored bind
-//   pose), so we keep an identical set of "virtual" joints purely for the Euler math
-//   (untouched copy of the original algorithms), and each frame compose:
-//       bone.quaternion = deltaFromEuler(virtualJoint) * bindQuaternion(bone)
-//   That composition is mathematically exactly "apply the game's pose on top of the
-//   model's own rest pose", regardless of how the bone was originally authored — so every
-//   existing pose, walk cycle and attack clip works on the new body without modification.
+//   character.ts) works by lerping plain Euler (x,y,z) values per joint. We keep an
+//   identical set of "virtual" joints purely for that Euler math (untouched copy of the
+//   original algorithms), and each frame compose the virtual pose on top of a live base:
+//       bone.quaternion = fixup(virtualJointEuler) * clipBaseQuaternion(bone)
+//   The base layer is the file's own embedded "metarig|IdleHover" animation, played
+//   looping through an AnimationMixer (gentle hover bob + breathing), snapshotted every
+//   frame. For the 4 center bones the Euler delta applies directly; for the 12 limb
+//   bones it is conjugated from the procedural reference frame (chest for arms, hips for
+//   legs) into the bone's parent frame: D = RC^-1 * Rp * RC. That mapping is verified
+//   numerically by scripts/test-rig.mjs (stand/fly/punch/stride behaviorals, L/R
+//   symmetry, loop-boundary pop, long-run stability) — re-run it if you touch this file.
 //
-// TUNING: everything below is derived from the uploaded file itself. If, once you actually
-// run the game, the model faces the wrong way / floats above the ground / is the wrong
-// size, the three constants right below are the only things you should need to touch —
-// I can't render a WebGL frame from here to check them myself.
+// Gotchas this file already handles (do not "simplify" these away):
+//   1. three.js GLTFLoader strips '.' from node names, so the file's "upper_arm.L_08"
+//      arrives as "upper_armL_08". BONE_NAMES below uses the SANITIZED names, and
+//      findBone additionally matches dot-insensitively as a fallback.
+//   2. The model faces +Z natively (MODEL_FACING_FIX = 0), but its L/R sides are
+//      mirrored vs the game's convention (game "L" = -X, model "L" = +X), so the limb
+//      map is SWAPPED: procedural shL drives the file's *R* arm, etc. With the fixup
+//      above, sided clips (jabR/crossL/...) still play on the correct side.
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import type { JointName, Pose, Palette, ClipDef, ClipKey } from "./character";
@@ -30,29 +36,44 @@ import modelUrl from "../assets/invincible.glb";
 
 const MODEL_SCALE = 1;                 // overall size multiplier
 const MODEL_Y_OFFSET = 0;              // + lifts the model, - sinks it into the ground
-const MODEL_FACING_FIX = Math.PI;      // rotate around Y so the model faces the game's +Z "forward"
+const MODEL_FACING_FIX = 0;            // model faces +Z natively (verified: toes + goggles point +Z)
 
-// Bone names as exported in the uploaded rig (metarig / Rigify-style naming).
+// Bone names as three.js GLTFLoader exposes them: '.' is stripped from the file's
+// metarig/Rigify-style names ("upper_arm.L_08" -> "upper_armL_08").
+// Limb sides are SWAPPED (see header): procedural *L drives the file's *R* bones.
 const BONE_NAMES: Record<JointName, string> = {
   spine: "Hips_01",
   chest: "Chest_04",
   neck: "NEck_05",
   head: "Head_06",
-  shL: "upper_arm.L_08",
-  elL: "forearm.L_09",
-  wrL: "hand.L_010",
-  shR: "upper_arm.R_027",
-  elR: "forearm.R_028",
-  wrR: "hand.R_029",
-  hipL: "thigh.L_045",
-  kneeL: "shin.L_046",
-  ankL: "foot.L_047",
-  hipR: "thigh.R_049",
-  kneeR: "shin.R_050",
-  ankR: "foot.R_051",
+  shL: "upper_armR_027",
+  elL: "forearmR_028",
+  wrL: "handR_029",
+  shR: "upper_armL_08",
+  elR: "forearmL_09",
+  wrR: "handL_010",
+  hipL: "thighR_049",
+  kneeL: "shinR_050",
+  ankL: "footR_051",
+  hipR: "thighL_045",
+  kneeR: "shinL_046",
+  ankR: "footL_047",
 };
-const CLAVICLE_L = "shoulder.L_07";
-const CLAVICLE_R = "shoulder.R_026";
+const CLAVICLE_L = "shoulderR_026"; // procedural-L side (-X) = file's R clavicle
+const CLAVICLE_R = "shoulderL_07";  // procedural-R side (+X) = file's L clavicle
+
+/** Limb joints need the reference-frame fixup; center joints apply the delta directly. */
+const LIMB_JOINTS: ReadonlySet<JointName> = new Set([
+  "shL", "elL", "wrL", "shR", "elR", "wrR",
+  "hipL", "kneeL", "ankL", "hipR", "kneeR", "ankR",
+]);
+/** Procedural-parent equivalent per limb chain (delta reference frame). */
+const LIMB_REF: Record<string, JointName> = {
+  shL: "chest", elL: "chest", wrL: "chest",
+  shR: "chest", elR: "chest", wrR: "chest",
+  hipL: "spine", kneeL: "spine", ankL: "spine",
+  hipR: "spine", kneeR: "spine", ankR: "spine",
+};
 
 /** Public surface both the procedural `Rig` and this class satisfy — engine.ts talks to this. */
 export interface HeroVisual {
@@ -88,11 +109,18 @@ export class GLTFHeroRig implements HeroVisual {
   private ready = false;
   private modelRoot: THREE.Object3D | null = null;
   private bones: Partial<Record<JointName, THREE.Object3D>> = {};
-  private bindQuat: Partial<Record<JointName, THREE.Quaternion>> = {};
+  /** Per-frame base pose from the IdleHover clip (what deltas compose onto). */
+  private baseQuat: Partial<Record<JointName, THREE.Quaternion>> = {};
+  /** Static reference-frame fixup per limb: D = RC^-1 * Rp * RC (see header). */
+  private restChain: Partial<Record<JointName, THREE.Quaternion>> = {};
+  private restChainInv: Partial<Record<JointName, THREE.Quaternion>> = {};
   private clavL: THREE.Object3D | null = null;
   private clavR: THREE.Object3D | null = null;
-  private clavBindL: THREE.Quaternion | null = null;
-  private clavBindR: THREE.Quaternion | null = null;
+  private clavBaseL = new THREE.Quaternion();
+  private clavBaseR = new THREE.Quaternion();
+  private mixer: THREE.AnimationMixer | null = null;
+  private clip: THREE.AnimationClip | null = null;
+  private lastT: number | null = null;
   private eyeMat: THREE.MeshStandardMaterial | null = null;
   private breath = 0;
 
@@ -115,6 +143,7 @@ export class GLTFHeroRig implements HeroVisual {
   private aura: THREE.Mesh;
   private auraGeo: THREE.BufferGeometry;
   private static _tmpQuat = new THREE.Quaternion();
+  private static _tmpQuat2 = new THREE.Quaternion();
 
   constructor(_pal: Palette, scale = 1) {
     // NOTE: this model doesn't recolor by palette (real textures, not procedural
@@ -141,13 +170,13 @@ export class GLTFHeroRig implements HeroVisual {
 
     new GLTFLoader().load(
       modelUrl,
-      (gltf) => this.onLoaded(gltf.scene),
+      (gltf) => this.onLoaded(gltf.scene, gltf.animations),
       undefined,
       (err) => console.error("Invincible model failed to load:", err),
     );
   }
 
-  private onLoaded(scene: THREE.Object3D): void {
+  private onLoaded(scene: THREE.Object3D, animations: THREE.AnimationClip[]): void {
     scene.rotation.y = MODEL_FACING_FIX;
     scene.position.y = MODEL_Y_OFFSET;
 
@@ -159,14 +188,18 @@ export class GLTFHeroRig implements HeroVisual {
         mesh.frustumCulled = false; // combat poses can swing outside the bind-pose bounds
         const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         for (const m of mats) {
-          if (m && /eye/i.test(m.name || "")) this.eyeMat = m as THREE.MeshStandardMaterial;
+          // This model has no "eye" material — the goggles serve as the glow target.
+          if (m && /eye|goggle/i.test(m.name || "")) this.eyeMat = m as THREE.MeshStandardMaterial;
         }
       }
     });
 
     const findBone = (name: string): THREE.Object3D | null => {
+      const plain = name.replace(/\./g, "");
       let found: THREE.Object3D | null = null;
-      scene.traverse((o) => { if (!found && o.name === name) found = o; });
+      scene.traverse((o) => {
+        if (!found && (o.name === name || o.name.replace(/\./g, "") === plain)) found = o;
+      });
       return found;
     };
 
@@ -175,15 +208,25 @@ export class GLTFHeroRig implements HeroVisual {
       const bone = findBone(BONE_NAMES[key]);
       if (!bone) { missing++; continue; }
       this.bones[key] = bone;
-      this.bindQuat[key] = bone.quaternion.clone();
+      this.baseQuat[key] = bone.quaternion.clone();
     }
     this.clavL = findBone(CLAVICLE_L);
     this.clavR = findBone(CLAVICLE_R);
-    this.clavBindL = this.clavL ? this.clavL.quaternion.clone() : null;
-    this.clavBindR = this.clavR ? this.clavR.quaternion.clone() : null;
     if (missing > 0) {
       console.warn(`Invincible rig: ${missing} bone(s) not found by name — animation will be partial.`);
     }
+
+    // Base layer: the file's own idle animation, played looping. Deltas compose on
+    // top of it every frame, so the hero breathes even when standing still.
+    if (animations.length > 0) {
+      this.clip = animations[0];
+      this.mixer = new THREE.AnimationMixer(scene);
+      this.mixer.clipAction(this.clip).play();
+      this.mixer.update(0);
+    }
+    scene.updateMatrixWorld(true);
+    this.snapshotBase();
+    this.computeRestChains();
 
     // fist / chest VFX anchors now ride the real bones
     if (this.bones.wrL) { this.fistL.position.set(0, 0.05, 0.08); this.bones.wrL.add(this.fistL); }
@@ -196,26 +239,69 @@ export class GLTFHeroRig implements HeroVisual {
     this.setPoseImmediate(POSES.idle);
   }
 
+  /** Capture the clip's current local quats — commit() composes deltas onto these. */
+  private snapshotBase(): void {
+    for (const key of Object.keys(this.bones) as JointName[]) {
+      const bone = this.bones[key];
+      if (!bone) continue;
+      let q = this.baseQuat[key];
+      if (!q) { q = new THREE.Quaternion(); this.baseQuat[key] = q; }
+      q.copy(bone.quaternion);
+    }
+    if (this.clavL) this.clavBaseL.copy(this.clavL.quaternion);
+    if (this.clavR) this.clavBaseR.copy(this.clavR.quaternion);
+  }
+
+  /**
+   * Reference-frame fixup per limb, computed once from the rest base:
+   * RC = Ref^-1 * parentRestWorld, applied as D = RC^-1 * Rp * RC.
+   * (Procedural deltas are authored in chest/hips space, but e.g. the arm bones hang
+   * under sideways-pointing clavicles — without this, punches would fly sideways.)
+   */
+  private computeRestChains(): void {
+    const refQ = new THREE.Quaternion();
+    const parentQ = new THREE.Quaternion();
+    for (const key of LIMB_JOINTS) {
+      const bone = this.bones[key];
+      const ref = this.bones[LIMB_REF[key]];
+      if (!bone || !ref || !bone.parent) continue;
+      ref.getWorldQuaternion(refQ);
+      bone.parent.getWorldQuaternion(parentQ);
+      const rc = refQ.clone().invert().multiply(parentQ);
+      this.restChain[key] = rc;
+      this.restChainInv[key] = rc.clone().invert();
+    }
+  }
+
   /* ---------------- bone commit: virtual joint Euler -> real bone quaternion ---------------- */
 
   private commit(): void {
     if (!this.ready) return;
     const tmp = GLTFHeroRig._tmpQuat;
+    const tmp2 = GLTFHeroRig._tmpQuat2;
     for (const key of Object.keys(this.bones) as JointName[]) {
       const bone = this.bones[key];
-      const bind = this.bindQuat[key];
-      if (!bone || !bind) continue;
+      const base = this.baseQuat[key];
+      if (!bone || !base) continue;
       tmp.setFromEuler(this.joints[key].rotation);
-      bone.quaternion.copy(bind).premultiply(tmp);
+      const rc = this.restChain[key];
+      const rcInv = this.restChainInv[key];
+      if (rc && rcInv) {
+        // D = RC^-1 * Rp * RC, then bone = D * base
+        tmp2.copy(rcInv).multiply(tmp).multiply(rc);
+        bone.quaternion.copy(base).premultiply(tmp2);
+      } else {
+        bone.quaternion.copy(base).premultiply(tmp);
+      }
     }
     // clavicles softly follow the shoulders for a natural shrug on big raises
-    if (this.clavL && this.clavBindL) {
+    if (this.clavL) {
       tmp.setFromEuler(new THREE.Euler(this.joints.shL.rotation.x * 0.3, this.joints.shL.rotation.y * 0.3, 0));
-      this.clavL.quaternion.copy(this.clavBindL).premultiply(tmp);
+      this.clavL.quaternion.copy(this.clavBaseL).premultiply(tmp);
     }
-    if (this.clavR && this.clavBindR) {
+    if (this.clavR) {
       tmp.setFromEuler(new THREE.Euler(this.joints.shR.rotation.x * 0.3, this.joints.shR.rotation.y * 0.3, 0));
-      this.clavR.quaternion.copy(this.clavBindR).premultiply(tmp);
+      this.clavR.quaternion.copy(this.clavBaseR).premultiply(tmp);
     }
     if (this.bones.chest) {
       this.bones.chest.scale.setScalar(1 + this.breath * 0.015);
@@ -340,6 +426,16 @@ export class GLTFHeroRig implements HeroVisual {
   /* ---------------- secondary motion ---------------- */
 
   addFlutter(t: number, amount: number): void {
+    // Advance the idle-clip base layer. addFlutter runs once per frame in every engine
+    // flow (menu + playing), so the clip time is derived from the game clock. If this
+    // ever stops being called, the base simply freezes — procedural poses keep working.
+    if (this.lastT === null) this.lastT = t;
+    const dt = Math.min(Math.max(t - this.lastT, 0), 0.1);
+    this.lastT = t;
+    if (this.mixer && this.ready) {
+      this.mixer.update(dt);
+      this.snapshotBase();
+    }
     this.breath = Math.sin(t * 1.7) * 0.5 + 0.5;
     if (amount > 0.001) {
       const a = amount;
@@ -390,6 +486,12 @@ export class GLTFHeroRig implements HeroVisual {
   updateCape(_dt: number, _localSpeed: number, _t: number): void {}
 
   dispose(): void {
+    if (this.mixer) {
+      this.mixer.stopAllAction();
+      if (this.clip) this.mixer.uncacheClip(this.clip);
+      this.mixer = null;
+      this.clip = null;
+    }
     if (this.modelRoot) {
       this.modelRoot.traverse((o) => {
         const mesh = o as THREE.Mesh;
