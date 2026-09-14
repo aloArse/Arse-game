@@ -579,9 +579,9 @@ export class Engine {
 
     this.rig.group.position.copy(this.pos);
     this.rig.group.rotation.set(0, this.yaw, 0);
-    this.rig.body.rotation.x = lerp(this.rig.body.rotation.x, -1.0, 1 - Math.exp(-3 * dt));
+    this.rig.body.rotation.x = lerp(this.rig.body.rotation.x, -0.2, 1 - Math.exp(-3 * dt)); // v6.4: level showcase pitch for flyM
     this.rig.body.rotation.z = Math.sin(this.t * 0.6) * 0.12;
-    this.rig.blendPose(POSES.fist, Math.min(1, dt * 4));
+    this.rig.blendPose(POSES.fly, Math.min(1, dt * 4)); // v6.4: menu showcases the user's Flying loop
     this.rig.addFlutter(this.t, 0.7);
     this.rig.setAura(false, 0, 0);
     this.trail.update(this.pos, this.camera, 0.5);
@@ -1066,7 +1066,7 @@ export class Engine {
     else if (this.grabbed) { pose = POSES.grab; blend = 14; }
     else if (this.blastT > 0) { pose = POSES.blast; blend = 14; }
     else if (this.hurtT > 0) { pose = POSES.hurt; blend = 12; }
-    else if (this.flyK > 0.55) { pose = this.cruise > 0.5 ? POSES.fist : POSES.fly; blend = 7; }
+    else if (this.flyK > 0.55) { pose = POSES.fly; blend = 7; } // v6.4: cruise always flies flyM (user's Flying) — diveM reserved for dash
     else if (this.flyK > 0.12) { pose = POSES.fly; blend = 6; }
     else if (this.grounded) {
       // on foot: procedural walk/run cycle or combat stance
@@ -1104,7 +1104,7 @@ export class Engine {
       this.slamPhase === "dive" || this.slamPhase === "pdDive" ? 0.75 :
         this.slamPhase === "rise" || this.slamPhase === "pdRise" ? -0.35 :
           this.cycloneT > 0 ? 0.1 :
-            this.dashT > 0 || (this.flyK > 0.55 && this.cruise > 0.5) ? -1.0 - climb * 0.5 :
+            this.dashT > 0 ? -1.0 - climb * 0.5 : // v6.4: steep pitch only for diveM dash; cruise uses level-flight branch below
               this.flyK * (0 - climb * 0.55) + (1 - this.flyK) * (vert > 0 ? -0.12 : 0.06);
     this.rig.body.rotation.x = lerp(this.rig.body.rotation.x, pitchTarget, 1 - Math.exp(-7 * dt));
 

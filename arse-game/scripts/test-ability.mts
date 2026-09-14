@@ -102,19 +102,20 @@ function hipsUpBody(): THREE.Vector3 {
     && Array.isArray((POSES as Record<string, Record<string, unknown>>)[n].shL));
   check("enemy POSES identities+values intact", ok, names.join(","));
 }
-// ---- menu/cruise-fast: diveM streamline hold, pitch -1.0 ----
+// ---- menu (v6.4): flyM showcase loop (user's Flying), pitch -0.2 ----
 {
-  sampleClip("diveM", A.clips.diveM.dur, -1.0); // engine holds the last frame
+  sampleClip("flyM", 1.3, -0.2); // engine loops flyM with a level showcase pitch
   const hL = WP("handR_029"), hR = WP("handL_010");
   const fL = WP("footR_051"), fR = WP("footL_047");
   const head = WP("Head_06"), hips = WP("Hips_01");
   const gw = faceWorld();
+  check("menu: arms spread wide (world)", Math.abs(hL.x) > 0.5 && Math.abs(hR.x) > 0.5,
+    `${Math.abs(hL.x).toFixed(2)}/${Math.abs(hR.x).toFixed(2)}`);
+  check("menu: not the missile (fists behind head)", hL.z - head.z < 0.1 && hR.z - head.z < 0.1,
+    `L${(hL.z - head.z).toFixed(2)} R${(hR.z - head.z).toFixed(2)}`);
   check("menu: head leads forward (world)", head.z - hips.z > 0.5, `+${(head.z - hips.z).toFixed(2)}`);
-  check("menu: fists past head (world)", hL.z - head.z > 0.1 && hR.z - head.z > 0.1,
-    `L+${(hL.z - head.z).toFixed(2)} R+${(hR.z - head.z).toFixed(2)}`);
-  check("menu: fists together", Math.abs(hL.x - hR.x) < 0.8, `spread=${Math.abs(hL.x - hR.x).toFixed(2)}`);
-  check("menu: legs trail back together", hips.z - fL.z > 0.5 && hips.z - fR.z > 0.5 && Math.abs(fL.x - fR.x) < 0.7,
-    `${(hips.z - fL.z).toFixed(2)}/${(hips.z - fR.z).toFixed(2)} spread=${Math.abs(fL.x - fR.x).toFixed(2)}`);
+  check("menu: legs trail behind (world)", hips.z - fL.z > 0.5 && hips.z - fR.z > 0.5,
+    `${(hips.z - fL.z).toFixed(2)}/${(hips.z - fR.z).toFixed(2)}`);
   check("menu: level flight", Math.abs(head.y - hips.y) < 0.6, `dy=${(head.y - hips.y).toFixed(2)}`);
   check("menu: gaze forward (world)", gw.z > 0.85 && Math.abs(gw.y) < 0.4, `(${gw.x.toFixed(2)},${gw.y.toFixed(2)},${gw.z.toFixed(2)})`);
 }
