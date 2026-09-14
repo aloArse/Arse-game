@@ -3,14 +3,16 @@
 // calls every frame (blendPose, playClip, walkPose, addFlutter, lookAt, setAura, ...).
 //
 // Animation architecture (baked mocap + procedural offsets):
-//   LAYER 1 - baked base: one of 23 mocap clips retargeted offline to THIS skeleton
-//     (scripts/bake-anims.mjs + postbake.mjs -> src/assets/anims.json, verified by
-//     scripts/test-anims.mjs). Base selection routes on POSE IDENTITY (engine passes
-//     POSES.* object refs): hover/idle/stand/idleFight/blast(hold)/hurt/block/loco.
+//   LAYER 1 - baked base: one of 28 mocap clips retargeted offline to THIS skeleton
+//     (scripts/bake-anims.mjs + bake-add.mjs + postbake.mjs -> src/assets/anims.json,
+//     verified by scripts/test-anims.mjs + test-new.mjs). Base selection routes on
+//     POSE IDENTITY (engine passes POSES.* object refs): hover/idle/stand/idleFight/
+//     blast(hold)/hurt/block/loco + fly/fist/dash/spin/slamUp/slamDown/grab.
 //   LAYER 2 - baked one-shot: single track with crossfade in/out (punches, kick,
 //     casts, throw, clap, snatch, land, hit). Engine clip names map via ONSHOT.
 //   LAYER 3 - procedural Euler offsets: the 16 virtual joints (character.ts math)
-//     compose on top for flight/dash/spin/slam/grab poses, flutter and lookAt.
+//     compose on top for flutter and lookAt only (flight/dash/spin/slam/grab are
+//     real mocap since v6.2; the old POSES euler values serve the enemies' rig).
 //   Unknown playClip names still fall back to the old Euler CLIPS path.
 // Locomotion is phase-driven: engine advances walkT via locoRate() (stride-matched,
 // footstep-synced); walkPose(phase, gSpd) selects walk/run/sprint by raw speed.
@@ -419,7 +421,9 @@ export class GLTFHeroRig implements HeroVisual {
     // Baked-routed poses own the body procedurally-zeroed; only true procedural
     // poses initialize the virtual joints (else the offsets double the baked base).
     const bakedRouted = pose === POSES.hover || pose === POSES.idle || pose === POSES.stand
-      || pose === POSES.idleFight || pose === POSES.blast || pose === POSES.hurt;
+      || pose === POSES.idleFight || pose === POSES.blast || pose === POSES.hurt
+      || pose === POSES.fly || pose === POSES.fist || pose === POSES.dash || pose === POSES.spin
+      || pose === POSES.slamUp || pose === POSES.slamDown || pose === POSES.grab;
     for (const k of Object.keys(this.joints) as JointName[]) {
       const t = bakedRouted ? undefined : pose[k];
       const j = this.joints[k];
@@ -480,8 +484,13 @@ export class GLTFHeroRig implements HeroVisual {
       this.noteSel("hurt");
       if (edge) this.fireOneShot(HIT_ROUTE, 1);
       this.requestBase("neutral", false, xf);
-    } else {
-      // full procedural pose (fly/fist/dash/spin/slam/grab/...): ride the STATIC
+    } else if (pose === POSES.fly || pose === POSES.slamUp || pose === POSES.slamDown) { this.requestBase("flyM", false, xf); this.noteSel("fly"); }
+    else if (pose === POSES.fist || pose === POSES.dash) { this.requestBase("swimM", false, xf); this.noteSel("swim"); }
+    else if (pose === POSES.spin) { this.requestBase("spinM", false, xf); this.noteSel("spin"); }
+    else if (pose === POSES.grab) { this.requestBase("grabM", false, xf); this.noteSel("grab"); }
+    else {
+      // legacy procedural fallback (unused by the hero since v6.2 — POSES euler
+      // values are kept for the enemies' procedural rig): ride the STATIC
       // neutral base so authored eulers act directly with zero mocap drift
       for (const name of Object.keys(this.joints) as JointName[]) {
         const j = this.joints[name];
@@ -728,6 +737,21 @@ export class GLTFHeroRig implements HeroVisual {
         bone.quaternion.premultiply(tmp2);
       } else {
         bone.quaternion.premultiply(tmp);
+      }
+    }
+    // flight gaze: fly/swim mocap stares at the water — pitch neck+head up so the
+    // hero looks where he's going (ramped with the base crossfade, no popping)
+    const baseName = this.baseClip === "loco" ? this.locoClip : this.baseClip;
+    const lookT = baseName === "flyM" ? -0.72 : baseName === "swimM" ? -0.95 : 0;
+    if (lookT !== 0) {
+      const w = this.prevClip && this.prevW > 0.001 ? 1 - this.prevW : 1;
+      if (this.bones.neck) {
+        tmp.setFromEuler(this._e.set(lookT * 0.4 * w, 0, 0));
+        this.bones.neck.quaternion.premultiply(tmp);
+      }
+      if (this.bones.head) {
+        tmp.setFromEuler(this._e.set(lookT * 0.6 * w, 0, 0));
+        this.bones.head.quaternion.premultiply(tmp);
       }
     }
     // clavicles softly follow the shoulders for a natural shrug on big raises

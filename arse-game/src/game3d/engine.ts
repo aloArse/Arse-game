@@ -579,7 +579,7 @@ export class Engine {
 
     this.rig.group.position.copy(this.pos);
     this.rig.group.rotation.set(0, this.yaw, 0);
-    this.rig.body.rotation.x = lerp(this.rig.body.rotation.x, 0.75, 1 - Math.exp(-3 * dt));
+    this.rig.body.rotation.x = lerp(this.rig.body.rotation.x, 0.05, 1 - Math.exp(-3 * dt));
     this.rig.body.rotation.z = Math.sin(this.t * 0.6) * 0.12;
     this.rig.blendPose(POSES.fist, Math.min(1, dt * 4));
     this.rig.addFlutter(this.t, 0.7);
@@ -1101,10 +1101,10 @@ export class Engine {
     // body pitch: upright hovering → horizontal at speed, plus climb/dive angle
     const climb = this.grounded ? 0 : clamp(this.vel.y / 55, -1, 1);
     const pitchTarget =
-      this.slamPhase === "dive" || this.slamPhase === "pdDive" ? 0.2 :
+      this.slamPhase === "dive" || this.slamPhase === "pdDive" ? 0.75 :
         this.slamPhase === "rise" || this.slamPhase === "pdRise" ? -0.35 :
           this.cycloneT > 0 ? 0.1 :
-            this.flyK * (1.28 - climb * 0.55) + (1 - this.flyK) * (vert > 0 ? -0.12 : 0.06);
+            this.flyK * (0 - climb * 0.55) + (1 - this.flyK) * (vert > 0 ? -0.12 : 0.06);
     this.rig.body.rotation.x = lerp(this.rig.body.rotation.x, pitchTarget, 1 - Math.exp(-7 * dt));
 
     // bank/roll into turns
@@ -1127,7 +1127,7 @@ export class Engine {
     this.rig.group.position.copy(this.pos);
     // cyclone adds a fast spin on top of the facing yaw
     if (this.cycloneT > 0) {
-      this.cycloneSpin += dt * (Math.PI * 2 * 3.4 / 0.9);
+      // baked spinM owns the 360° whirl — no engine spin needed (mocap 2.2 rev/s)
       this.rig.group.rotation.set(0, this.yaw + this.cycloneSpin, 0);
     } else {
       // unwind along the shortest path so the hero never snaps
