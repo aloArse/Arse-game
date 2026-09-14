@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import { FX, Trail } from "./fx";
 import { City, CITY_HALF, ZONE_R } from "./city";
-import { POSES, skinById } from "./character";
+import { POSES, skinById, fxById } from "./character";
 import { GLTFHeroRig, type HeroVisual } from "./heroModel";
 import { Enemies, BOSS_TYPES, type EKind, type Enemy } from "./enemies";
 import { audio } from "../game/audio";
@@ -30,6 +30,9 @@ function lerpAngle(a: number, b: number, t: number): number {
 const CD_STRIKE = 0.36, CD_BLAST = 0.16, CD_DASH = 2.2, CD_SLAM = 6.5, CD_CYCLONE = 5.5, CD_BOLT = 9;
 const CD_METEOR = 14, CD_CHAIN = 11, CD_BUBBLE = 18, CD_MISSILE = 12;
 const EN_BLAST = 4, EN_DASH = 12, EN_SLAM = 32, EN_CYCLONE = 18, EN_METEOR = 30, EN_CHAIN = 16, EN_BUBBLE = 26, EN_MISSILE = 22;
+/** v6.5: hero body-centre height above the group origin (2.9m hero: feet ~0.1, head ~2.9).
+ *  Aerial burst FX centre on pos+BODY_CY instead of the feet. */
+const BODY_CY = 1.7;
 /** space begins fading in above this altitude */
 const SPACE_ALT = 1250;
 /** the battle zone: central plaza */
@@ -245,6 +248,7 @@ export class Engine {
     this.traffic = new Traffic(this.scene, CITY_HALF, 78, qp.traffic);
 
     this.fx = new FX(this.scene);
+    this.fx.setQuality(qp.particle);
     this.city = new City(this.scene);
     this.city.onRebuild = (b) => this.onCityRebuild(b);
     this.enemies = new Enemies(this.scene);
@@ -271,6 +275,7 @@ export class Engine {
 
     this.buildShield();
     this.buildPools();
+    this.applySkinFx();
 
     {
       const st = settings.get();
@@ -312,8 +317,9 @@ export class Engine {
       blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
     });
     this.shield = new THREE.Mesh(new THREE.SphereGeometry(1.35, 22, 16), mat);
-    this.shield.position.set(0, 0.25, 0.35);
-    this.shield.scale.set(0.95, 1.2, 0.85);
+    // v6.5: sized for the 2.9m hero (old shell sat at knee height — the head poked out)
+    this.shield.position.set(0, 1.5, 0.1);
+    this.shield.scale.set(0.62, 1.15, 0.62);
     this.shield.visible = false;
     this.rig.group.add(this.shield);
   }
@@ -463,10 +469,10 @@ export class Engine {
     this.heroDead = false; this.deadT = 0;
     this.rig.group.visible = true;
     this.rig.setPoseImmediate(POSES.hover);
-    this.rig.setEyeGlow(0xffffff, 1.2);
-    this.trail.reset(this.pos);
-    this.fistTrailL.reset(this.pos);
-    this.fistTrailR.reset(this.pos);
+    this.rig.setEyeGlow(fxById(this.activeSkin).eye, 1.2);
+    this.trail.reset(this.rig.chestAnchor.getWorldPosition(this._v));
+    this.fistTrailL.reset(this.rig.fistL.getWorldPosition(this._v));
+    this.fistTrailR.reset(this.rig.fistR.getWorldPosition(this._v));
     (this.shield.material as THREE.MeshBasicMaterial).opacity = 0;
     this.shield.visible = false;
     this.camPos.copy(this.pos).add(new THREE.Vector3(0, 4, -14));
@@ -584,7 +590,7 @@ export class Engine {
     this.rig.blendPose(POSES.fly, Math.min(1, dt * 4)); // v6.4: menu showcases the user's Flying loop
     this.rig.addFlutter(this.t, 0.7);
     this.rig.setAura(false, 0, 0);
-    this.trail.update(this.pos, this.camera, 0.5);
+    this.trail.update(this.rig.chestAnchor.getWorldPosition(this._v), this.camera, 0.5);
     this.fistTrailL.update(this.pos, this.camera, 0);
     this.fistTrailR.update(this.pos, this.camera, 0);
 
@@ -772,7 +778,7 @@ export class Engine {
     const mv = moveAxis();
     const vert = vertAxis();
     this._fwd.set(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
-    this._right.set(this._fwd.z, 0, -this._fwd.x);
+    this._right.set(-this._fwd.z, 0, this._fwd.x); // v6.5: screen-right = fwd x up (was negated: left/right steered inverted)
 
     this._in.set(0, 0, 0);
     this._in.addScaledVector(this._right, mv.x);
@@ -955,20 +961,22 @@ export class Engine {
     if (speed > 62 && Math.random() < dt * 26) {
       this._v2.copy(this.vel).normalize();
       const p = this._v.copy(this.pos).addScaledVector(this._v2, -2.5);
+      p.y += BODY_CY;
       this.fx.jet(p.x, p.y, p.z, -this._v2.x, -this._v2.y, -this._v2.z,
         0xbfe0ff, 2, 16, 1.1, 0.3, 0.32);
     }
     // sonic boom
     if (speed > 92 && this.cruise > 0.92 && Math.random() < dt * 1.6) {
-      this.fx.ring(this.pos.x, this.pos.y, this.pos.z, 0xffffff, 13, 0.42, false, 1.1);
+      this.fx.ring(this.pos.x, this.pos.y + BODY_CY, this.pos.z, 0xffffff, 13, 0.42, false, 1.1);
       audio.play("dash", 0.34);
     }
 
-    this.trail.update(this.pos, this.camera, clamp((speed - 26) / 70, 0, 1) * (this.dashT > 0 ? 1 : 0.8));
+    this.trail.update(this.rig.chestAnchor.getWorldPosition(this._v), this.camera, clamp((speed - 26) / 70, 0, 1) * (this.dashT > 0 ? 1 : 0.8));
 
     // hero light
     const lightK = this.odT > 0 ? 3.4 : this.dashT > 0 ? 2.6 : this.cycloneT > 0 ? 2.2 : blocking ? 1.6 : speed > 60 ? 1.1 : 0.4;
     this.heroLight.position.copy(this.pos);
+    this.heroLight.position.y += BODY_CY;
     this.heroLight.color.setHex(
       this.odT > 0 ? 0xff9a3c : this.cycloneT > 0 ? 0xffd23f : blocking ? 0x6ecbff : 0x8fc4ff,
     );
@@ -978,7 +986,7 @@ export class Engine {
     if (od && Math.random() < dt * 45) {
       this.fx.spark(
         this.pos.x + (Math.random() - 0.5) * 2.4,
-        this.pos.y + (Math.random() - 0.5) * 3,
+        this.pos.y + 1.5 + (Math.random() - 0.5) * 3,
         this.pos.z + (Math.random() - 0.5) * 2.4,
         Math.random() > 0.5 ? 0xff7a3c : 0xffd23f, 1, 5, 0.5, 0.5, 7, 1,
       );
@@ -996,8 +1004,8 @@ export class Engine {
         this.score += hits * 14;
         this.shake = Math.max(this.shake, this.dashT > 0 ? 9 : 6.5);
         this.stopT = Math.max(this.stopT, 0.045);
-        this.fx.flash(this.pos.x, this.pos.y, this.pos.z, 0xffd0a0, 7, 0.22);
-        this.fx.ring(this.pos.x, this.pos.y, this.pos.z, 0xffe0b0, 20, 0.4, false, 1.3);
+        this.fx.flash(this.pos.x, this.pos.y + BODY_CY, this.pos.z, 0xffd0a0, 7, 0.22);
+        this.fx.ring(this.pos.x, this.pos.y + BODY_CY, this.pos.z, 0xffe0b0, 20, 0.4, false, 1.3);
         audio.play("boom", 0.8);
         if (this.dashT <= 0) this.vel.multiplyScalar(0.86);
         this.addCombo(1);
@@ -1015,10 +1023,12 @@ export class Engine {
   private groundImpact(): void {
     const p = this.pos;
     this.traffic.panicAt(p.x, p.z, 55);
-    this.fx.ring(p.x, 0.8, p.z, 0xffd2a0, 26, 0.55, true, 1.4);
-    this.fx.smoke(p.x, 1.5, p.z, 12, 12, 3, 0xa1959a, 2.6);
-    this.fx.spark(p.x, 1, p.z, 0xffc978, 18, 22, 0.5, 0.5, -20, 0.4);
-    this.city.spawnDebris(p.x, 1, p.z, 8, 16, 3);
+    // v6.5: relative to the landing point (old code hardcoded street level,
+    // so rooftop landings puffed dust on the street far below)
+    this.fx.ring(p.x, p.y - 0.4, p.z, 0xffd2a0, 26, 0.55, true, 1.4);
+    this.fx.smoke(p.x, p.y + 0.4, p.z, 12, 12, 3, 0xa1959a, 2.6);
+    this.fx.spark(p.x, p.y - 0.2, p.z, 0xffc978, 18, 22, 0.5, 0.5, -20, 0.4);
+    this.city.spawnDebris(p.x, p.y - 0.2, p.z, 8, 16, 3);
     this.shake = Math.max(this.shake, 6);
     audio.play("boom", 0.7);
   }
@@ -1146,22 +1156,26 @@ export class Engine {
     this.rig.fistR.getWorldPosition(this._v);
     this.fistTrailR.update(this._v, this.camera, trailK * (this.cycloneT > 0 ? 1 : this.punchSide === 0 ? 0.9 : 0.35));
 
-    // eyes + aura
+    // eyes + aura (base colours follow the skin theme; OD/cyclone keep their state signals)
+    const fxt = fxById(this.activeSkin);
     if (od) {
       this.rig.setEyeGlow(0xffb03c, 3.6);
-      this.rig.setAura(true, 0xff8a30, 0.3 + Math.sin(this.t * 9) * 0.08);
+      this.rig.setAura(true, fxt.auraOd, 0.3 + Math.sin(this.t * 9) * 0.08);
     } else if (this.cycloneT > 0) {
       this.rig.setEyeGlow(0xffd23f, 2.8);
       this.rig.setAura(true, 0xffd23f, 0.18);
     } else {
-      this.rig.setEyeGlow(0xffffff, this.dashT > 0 ? 2.6 : 1.25);
-      this.rig.setAura(this.dashT > 0, 0x8fc4ff, this.dashT > 0 ? 0.22 : 0);
+      this.rig.setEyeGlow(fxt.eye, this.dashT > 0 ? 2.6 : 1.25);
+      this.rig.setAura(this.dashT > 0, fxt.auraDash, this.dashT > 0 ? 0.22 : 0);
     }
 
-    // energy shield while bracing
+    // energy shield while bracing (morphs to a flight loaf when airborne)
     const sm = this.shield.material as THREE.MeshBasicMaterial;
     this.shield.visible = this.blockT > 0.05;
     sm.opacity = this.blockT * (0.16 + Math.sin(this.tReal * 14) * 0.05);
+    const fk = Math.min(1, Math.max(0, this.flyK));
+    this.shield.position.set(0, 1.5 + fk * 0.3, 0.1 - fk * 0.15);
+    this.shield.scale.set(0.62 + fk * 0.13, 1.15 - fk * 0.55, 0.62 + fk * 0.63);
 
     // blink while invulnerable
     this.rig.group.visible = !(this.iT > 0 && this.hurtT <= 0 && Math.sin(this.tReal * 40) > 0.2);
@@ -1170,8 +1184,8 @@ export class Engine {
 
   private emitDashFx(dt: number): void {
     const p = this.pos;
-    this.fx.jet(p.x, p.y, p.z, -this.dashDir.x, -this.dashDir.y, -this.dashDir.z,
-      0xaad6ff, Math.ceil(dt * 160), 26, 1.2, 0.42, 0.3);
+    this.fx.jet(p.x, p.y + BODY_CY, p.z, -this.dashDir.x, -this.dashDir.y, -this.dashDir.z,
+      fxById(this.activeSkin).trail, Math.ceil(dt * 160), 26, 1.2, 0.42, 0.3);
     // carve through buildings while dashing
     const hits = this.city.smashThrough(p, 4.6, this.fx, 26);
     if (hits > 0) {
@@ -1238,7 +1252,7 @@ export class Engine {
         if (d > 3.2) this.vel.addScaledVector(this._aim, Math.min(42, (d - 3.2) * 5));
 
         const reach = 3.0;
-        const hitPos = this._v.copy(this.pos).addScaledVector(this._aim, reach);
+        const hitPos = this.rig.chestAnchor.getWorldPosition(this._v).addScaledVector(this._aim, reach);
         const dmg = (od ? 40 : 24);
         let hitAny = false;
         for (const e of this.enemies.list) {
@@ -1295,7 +1309,9 @@ export class Engine {
           e.v.y += e.kind === "boss" ? 10 : 46;
         }
       }
-      const b = this.city.collide(this._v.copy(this.pos).addScaledVector(this._aim, 2.6), 3.2, this._push);
+      this._v.copy(this.pos).addScaledVector(this._aim, 2.6);
+      this._v.y += 2;
+      const b = this.city.collide(this._v, 3.2, this._push);
       if (b) {
         hitAny = true;
         const before = this.city.demolished;
@@ -1305,8 +1321,8 @@ export class Engine {
       if (hitAny) {
         this.stopT = Math.max(this.stopT, 0.12);
         this.shake = Math.max(this.shake, 11);
-        this.fx.flash(this.pos.x, this.pos.y, this.pos.z, 0xffe0a0, 6.5, 0.24);
-        this.fx.ring(this.pos.x, this.pos.y, this.pos.z, 0xffd23f, 13, 0.4, false, 1.6);
+        this.fx.flash(this.pos.x, this.pos.y + BODY_CY, this.pos.z, 0xffe0a0, 6.5, 0.24);
+        this.fx.ring(this.pos.x, this.pos.y + BODY_CY, this.pos.z, 0xffd23f, 13, 0.4, false, 1.6);
         audio.play("punch", 1.4);
         navigator.vibrate?.(18);
       }
@@ -1329,7 +1345,7 @@ export class Engine {
     }
 
     const reach = finisher ? 4.0 : 3.2;
-    const hitPos = this._v.copy(this.pos).addScaledVector(this._aim, reach);
+    const hitPos = this.rig.chestAnchor.getWorldPosition(this._v).addScaledVector(this._aim, reach);
     const radius = finisher ? 4.6 : 3.4;
     const dmg = (finisher ? 96 : step === 1 ? 48 : 40) * (od ? 1.95 : 1);
     let hitAny = false;
@@ -1389,7 +1405,7 @@ export class Engine {
     this.punchSide = 0;
     this.rig.playClip("kickHit", 1.7);
 
-    const hitPos = this._v.copy(this.pos).addScaledVector(this.dashDir, 3.4);
+    const hitPos = this.rig.chestAnchor.getWorldPosition(this._v).addScaledVector(this.dashDir, 3.4);
     const dmg = od ? 110 : 62;
     let hitAny = false;
     for (const e of this.enemies.list) {
@@ -1441,9 +1457,9 @@ export class Engine {
       this.beam = g;
     }
     this.visionT -= dt;
-    const origin = this._v3.copy(this.pos);
-    origin.y += 0.62;
-    origin.addScaledVector(this._aim, 0.6);
+    // v6.5: beam leaves from between the eyes (was shin height + aim*0.6)
+    const origin = this.rig.eyeAnchor.getWorldPosition(this._v3);
+    origin.addScaledVector(this._aim, 0.5);
     const dir = this._aim;
     let len = 95;
     const hitP = this._v2;
@@ -1490,7 +1506,7 @@ export class Engine {
       m.opacity = (c === this.beam.children[0] ? 0.95 : 0.42) * flick;
     }
     this.beam.scale.set(1, len, 1);
-    this.rig.setEyeGlow(0xffffff, 4.5);
+    this.rig.setEyeGlow(fxById(this.activeSkin).eye, 4.5);
     this.shake = Math.max(this.shake, 2.2);
     if (Math.random() < dt * 7) audio.play("beam", 0.55);
   }
@@ -1604,7 +1620,8 @@ export class Engine {
     this.cd.chain = this.cdOf(CD_CHAIN);
     const od = this.odT > 0;
 
-    let prev = this._v.copy(this.pos);
+    const prev = this._v.copy(this.pos);
+    prev.y += 2.2; // arcs leave from hand height, not the feet
     let from = prev.clone();
     let hit: Enemy | null = null;
     let bd = 95;
@@ -1638,7 +1655,7 @@ export class Engine {
       // no target: bolt into the ground ahead
       const to = this._v2.copy(this.pos).addScaledVector(this._aim, 40);
       to.y = Math.max(0, this.city.surfaceY(to.x, to.z));
-      this.fx.bolt(this.pos.x, this.pos.y, this.pos.z, to.x, to.y + 1, to.z, 0x9fe8ff, 0.22);
+      this.fx.bolt(this.pos.x, this.pos.y + 2.2, this.pos.z, to.x, to.y + 1, to.z, 0x9fe8ff, 0.22);
       this.city.gouge(to, 4, this.fx, 30, 4);
     }
     this.shake = Math.max(this.shake, 4 + hops);
@@ -1676,6 +1693,7 @@ export class Engine {
     const s = 1 + this.bubblePulse * 0.18 + Math.sin(this.t * 6) * 0.03;
     this.bubbleMesh.scale.setScalar(s * k);
     this.bubbleMesh.position.copy(this.pos);
+    this.bubbleMesh.position.y += 1.5;
     (this.bubbleMesh.material as THREE.MeshBasicMaterial).opacity = (0.18 + this.bubblePulse * 0.3) * k;
     // push enemies away
     for (const e of this.enemies.list) {
@@ -1688,7 +1706,7 @@ export class Engine {
     }
     if (this.bubbleT <= 0) {
       this.bubbleMesh.visible = false;
-      this.fx.ring(this.pos.x, this.pos.y, this.pos.z, 0x7ae0ff, 12, 0.4, false, 1.8);
+      this.fx.ring(this.pos.x, this.pos.y + 1.5, this.pos.z, 0x7ae0ff, 12, 0.4, false, 1.8);
     }
   }
 
@@ -1713,7 +1731,7 @@ export class Engine {
       tip.position.z = 0.75;
       g.add(tip);
       const a = (i / 6) * Math.PI * 2;
-      g.position.copy(this.pos).add(new THREE.Vector3(Math.cos(a) * 2.2, -0.4, Math.sin(a) * 2.2));
+      g.position.copy(this.pos).add(new THREE.Vector3(Math.cos(a) * 2.2, 2.2, Math.sin(a) * 2.2));
       this.scene.add(g);
       this.missiles.push({
         active: true, mesh: g,
@@ -1782,8 +1800,8 @@ export class Engine {
     this.cycloneSpin = 0;
     this.iT = Math.max(this.iT, this.cycloneT + 0.15);
     audio.play("cyclone");
-    this.fx.ring(this.pos.x, this.pos.y, this.pos.z, 0xffd23f, 16, 0.4, false, 1.4);
-    this.fx.flash(this.pos.x, this.pos.y, this.pos.z, 0xffe9b0, 4, 0.18);
+    this.fx.ring(this.pos.x, this.pos.y + BODY_CY, this.pos.z, 0xffd23f, 16, 0.4, false, 1.4);
+    this.fx.flash(this.pos.x, this.pos.y + BODY_CY, this.pos.z, 0xffe9b0, 4, 0.18);
     this.setMsg("CYCLONE", 0.9, "warn");
     navigator.vibrate?.(30);
   }
@@ -1799,7 +1817,7 @@ export class Engine {
       const r = 3.5 + Math.random() * 2;
       this._v2.set(
         this.pos.x + Math.cos(a) * r,
-        this.pos.y + (Math.random() - 0.5) * 3,
+        this.pos.y + 1.5 + (Math.random() - 0.5) * 3,
         this.pos.z + Math.sin(a) * r,
       );
       this.fx.spark(this._v2.x, this._v2.y, this._v2.z, 0xd8ecff, 1, 12, 0.4, 0.3, 0, 1);
@@ -1834,10 +1852,10 @@ export class Engine {
       // finisher shockwave
       const od = this.odT > 0;
       this.cycloneT = 0;
-      this.fx.ring(this.pos.x, this.pos.y, this.pos.z, 0xffffff, 16, 0.45, false, 2);
-      this.fx.ring(this.pos.x, this.pos.y, this.pos.z, 0xffd23f, 26, 0.55, true, 1.6);
-      this.fx.flash(this.pos.x, this.pos.y, this.pos.z, 0xffe9b0, 7, 0.24);
-      this.fx.spark(this.pos.x, this.pos.y, this.pos.z, 0xffe27a, 40, 36, 0.7, 0.6, -6, 1);
+      this.fx.ring(this.pos.x, this.pos.y + BODY_CY, this.pos.z, 0xffffff, 16, 0.45, false, 2);
+      this.fx.ring(this.pos.x, this.pos.y + BODY_CY, this.pos.z, 0xffd23f, 26, 0.55, true, 1.6);
+      this.fx.flash(this.pos.x, this.pos.y + BODY_CY, this.pos.z, 0xffe9b0, 7, 0.24);
+      this.fx.spark(this.pos.x, this.pos.y + BODY_CY, this.pos.z, 0xffe27a, 40, 36, 0.7, 0.6, -6, 1);
       this.shake = Math.max(this.shake, 9);
       this.fovKick = Math.max(this.fovKick, 6);
       audio.play("boom", 0.9);
@@ -2010,14 +2028,15 @@ export class Engine {
       // small lead
       this._v2.addScaledVector(tgt.v, 0.006).normalize();
     }
-    const muzzle = this._v.copy(this.pos).addScaledVector(this._v2, 2.2);
-    muzzle.y += 0.4;
-    this.spawnShot(muzzle, this._v2, 190, od ? 40 : 21, 0xffd23f, 0.5, false);
+    // v6.5: bolts leave from the cast palm (was thin air at knee height); OD fires both palms
+    const boltCol = fxById(this.activeSkin).bolt;
+    const muzzle = this.rig.fistL.getWorldPosition(this._v).addScaledVector(this._v2, 0.6);
+    this.spawnShot(muzzle, this._v2, 190, od ? 40 : 21, boltCol, 0.5, false);
     if (od) {
-      // overdrive: twin bolts
-      this._v.copy(this._v2).applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.06);
-      const m2 = this._v.clone().multiplyScalar(2.2).add(this.pos);
-      this.spawnShot(m2, this._v, 190, 34, 0xffa03c, 0.42, false);
+      // overdrive: twin bolt from the off hand (the old code also clobbered
+      // `muzzle` here, which flung the OD muzzle flash to the world origin)
+      const m2 = this.rig.fistR.getWorldPosition(this._v3).addScaledVector(this._v2, 0.6);
+      this.spawnShot(m2, this._v2, 190, 34, boltCol, 0.42, false);
     }
     this.fx.jet(muzzle.x, muzzle.y, muzzle.z, this._v2.x, this._v2.y, this._v2.z,
       0xffe27a, 7, 22, 0.45, 0.3, 0.2);
@@ -2091,7 +2110,7 @@ export class Engine {
       }
     } else if (this.slamPhase === "dive") {
       this.vel.set(this.vel.x * 0.92, -175, this.vel.z * 0.92);
-      this.fx.jet(this.pos.x, this.pos.y, this.pos.z, 0, 1, 0, 0xffb04a, 4, 24, 0.9, 0.4, 0.34);
+      this.fx.jet(this.pos.x, this.pos.y + BODY_CY, this.pos.z, 0, 1, 0, 0xffb04a, 4, 24, 0.9, 0.4, 0.34);
       const surf = this.city.surfaceY(this.pos.x, this.pos.z);
       if (this.pos.y <= surf + 2.2 || this.slamT <= 0) {
         this.pos.y = Math.max(surf + 1.4, this.pos.y);
@@ -2125,7 +2144,7 @@ export class Engine {
       }
     } else if (this.slamPhase === "pdRise") {
       this.vel.set(this.vel.x * 0.86, 88, this.vel.z * 0.86);
-      this.fx.jet(this.pos.x, this.pos.y - 1, this.pos.z, 0, -1, 0, 0xff5a6e, 3, 16, 0.7, 0.35, 0.3);
+      this.fx.jet(this.pos.x, this.pos.y + BODY_CY, this.pos.z, 0, -1, 0, 0xff5a6e, 3, 16, 0.7, 0.35, 0.3);
       if (this.slamT <= 0 || this.pos.y > 240) {
         this.slamPhase = "pdDive";
         this.slamT = 2.0;
@@ -2717,13 +2736,23 @@ export class Engine {
 
   /* ---------------- live settings & customisation ---------------- */
 
+  /** recolour the persistent hero effects (trails, shield) to the active skin theme */
+  private applySkinFx(): void {
+    const fxt = fxById(this.activeSkin);
+    this.trail.setColor(fxt.trail);
+    this.fistTrailL.setColor(fxt.fist);
+    this.fistTrailR.setColor(fxt.fist);
+    (this.shield.material as THREE.MeshBasicMaterial).color.setHex(fxt.shield);
+  }
+
   /** swap the hero skin at runtime — the real model has fixed textures, so this
-   *  only updates the stored preference/HUD now (no rig rebuild needed). */
+   *  updates the stored preference/HUD plus the VFX theme (no rig rebuild needed). */
   setSkin(id: string): void {
     const skin = skinById(id);
     if (skin.id === this.activeSkin) return;
     this.activeSkin = skin.id;
     this.hud.skin = skin.id;
+    this.applySkinFx();
     // transformation shimmer
     for (let i = 0; i < 22; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -2749,6 +2778,7 @@ export class Engine {
     const qp = qualityProfile(st.quality);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, qp.pixelRatio));
     this.onResize();
+    this.fx.setQuality(qp.particle);
     this.bloomOn = qp.bloom && this.fpsEma > 28;
     this.shakeEnabled = st.shake;
     audio.setVolumes({ master: st.master, sfx: st.sfx, music: st.music });

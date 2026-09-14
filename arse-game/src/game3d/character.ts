@@ -83,6 +83,32 @@ export function skinById(id: string): SkinDef {
   return SKINS.find((sk) => sk.id === id) ?? SKINS[0];
 }
 
+// ================= per-skin VFX theme (v6.5) =================
+// Effect colours tuned per skin. `classic` keeps the legacy values exactly,
+// so the default look is pixel-identical; other skins get a coherent theme.
+export interface SkinFx {
+  eye: number;       // base eye glow (dash/idle/vision states)
+  trail: number;     // flight ribbon
+  fist: number;      // punch/cyclone fist ribbons
+  bolt: number;      // plasma blast bolts
+  auraOd: number;    // overdrive aura shell
+  auraDash: number;  // dash aura shell
+  shield: number;    // brace shield bubble
+}
+
+export const SKIN_FX: Record<string, SkinFx> = {
+  classic: { eye: 0xffffff, trail: 0xaad6ff, fist: 0xffe9b0, bolt: 0xffd23f, auraOd: 0xff8a30, auraDash: 0x8fc4ff, shield: 0x6ecbff },
+  omni: { eye: 0xffe27a, trail: 0xffe9b0, fist: 0xfff3d0, bolt: 0xf2c14e, auraOd: 0xffb03c, auraDash: 0xd8ecff, shield: 0x9fd0ff },
+  midnight: { eye: 0x2ee6ff, trail: 0x2ee6ff, fist: 0x9ff0ff, bolt: 0x2ee6ff, auraOd: 0x2ee6ff, auraDash: 0x2ee6ff, shield: 0x2ee6ff },
+  solar: { eye: 0xffd23f, trail: 0xffb054, fist: 0xffe9a0, bolt: 0xffc23f, auraOd: 0xff7a1a, auraDash: 0xffc06a, shield: 0xff9a3c },
+  viltrum: { eye: 0xffe27a, trail: 0xd8dee9, fist: 0xffd0d0, bolt: 0xd32436, auraOd: 0xd32436, auraDash: 0x8fc4ff, shield: 0x6ecbff },
+  nova: { eye: 0xff9fff, trail: 0xff4fd8, fist: 0xffb0ec, bolt: 0xff4fd8, auraOd: 0xff4fd8, auraDash: 0xc79bff, shield: 0xff4fd8 },
+};
+
+export function fxById(id: string): SkinFx {
+  return SKIN_FX[id] ?? SKIN_FX.classic;
+}
+
 export const BOSS_PAL: Palette = {
   suit: 0xf4f5fa, suitDark: 0xc0c5d6, accent: 0xd32436, accentDark: 0x8e121f,
   skin: 0xe8ab80, eye: 0xffe27a,

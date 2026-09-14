@@ -110,6 +110,8 @@ interface Pool {
   head: number;
   count: number;
   geo: THREE.BufferGeometry;
+  /** fresh emissions not yet uploaded (lets idle pools skip GPU uploads) */
+  dirty: boolean;
 }
 
 function makePool(n: number, additive: boolean, tex: THREE.Texture, chunk: boolean): Pool {
@@ -150,7 +152,7 @@ function makePool(n: number, additive: boolean, tex: THREE.Texture, chunk: boole
     grav: new Float32Array(n),
     drag: new Float32Array(n),
     grow: new Float32Array(n),
-    head: 0, count: n,
+    head: 0, count: n, dirty: false,
   };
 }
 
@@ -174,12 +176,15 @@ function poolEmit(
   p.grow[i] = grow;
   p.rot[i] = Math.random() * Math.PI * 2;
   p.rotV[i] = spin * (Math.random() - 0.5) * 2;
+  p.dirty = true;
 }
 
 function poolUpdate(p: Pool, dt: number): void {
   const { pos, vel, life, max, alpha, size, grav, drag, grow, rot, rotV, count } = p;
+  let alive = 0;
   for (let i = 0; i < count; i++) {
     if (life[i] <= 0) continue;
+    alive++;
     life[i] -= dt;
     if (life[i] <= 0) {
       alpha[i] = 0;
@@ -198,6 +203,9 @@ function poolUpdate(p: Pool, dt: number): void {
     const k = life[i] / max[i];
     alpha[i] = k > 0.8 ? (1 - k) * 5 : k / 0.8;
   }
+  // fully idle pool: skip the GPU buffer uploads (saves ~150KB/frame idle)
+  if (alive === 0 && !p.dirty) return;
+  p.dirty = false;
   p.geo.attributes.position.needsUpdate = true;
   p.geo.attributes.aColor.needsUpdate = true;
   p.geo.attributes.aSize.needsUpdate = true;
@@ -245,6 +253,12 @@ export class FX {
   private pillars: Pillar[] = [];
   private lights: { l: THREE.PointLight; life: number; max: number; base: number }[] = [];
   private c = new THREE.Color();
+  /** emission multiplier from qualityProfile().particle (low 0.45 / med 0.75 / high 1) */
+  private q = 1;
+
+  setQuality(scale: number): void {
+    this.q = Math.min(1, Math.max(0.2, scale));
+  }
 
   constructor(scene: THREE.Scene) {
     const glow = makeGlowTexture();
@@ -325,6 +339,7 @@ export class FX {
     spd: number, size = 0.5, life = 0.5, grav = -6, spreadY = 1,
   ): void {
     this.c.set(color);
+    n = Math.max(1, Math.round(n * this.q));
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const u = Math.random() * 2 - 1;
@@ -347,6 +362,7 @@ export class FX {
     color: number, n: number, spd: number, spread: number, size = 0.4, life = 0.4,
   ): void {
     this.c.set(color);
+    n = Math.max(1, Math.round(n * this.q));
     for (let i = 0; i < n; i++) {
       const v = spd * (0.5 + Math.random() * 0.8);
       poolEmit(
@@ -364,6 +380,7 @@ export class FX {
 
   smoke(x: number, y: number, z: number, n: number, spd: number, size: number, color = 0x8c8296, life = 2.2): void {
     this.c.set(color);
+    n = Math.max(1, Math.round(n * this.q));
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const u = (Math.random() - 0.2) * 1.1;
@@ -384,6 +401,7 @@ export class FX {
   /** tumbling concrete/rebar debris chunks */
   chunk(x: number, y: number, z: number, color: number, n: number, spd: number, size = 1, life = 1.6): void {
     this.c.set(color);
+    n = Math.max(1, Math.round(n * this.q));
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const u = Math.random() * 2 - 1;
@@ -406,6 +424,7 @@ export class FX {
    * through orange to deep red, plus drifting embers and dark smoke.
    */
   flame(x: number, y: number, z: number, n: number, size: number, spread = 1): void {
+    n = Math.max(1, Math.round(n * this.q));
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = Math.random() * spread;
@@ -643,6 +662,7 @@ export class FX {
       }
       p.geo.attributes.position.needsUpdate = true;
       p.geo.attributes.aAlpha.needsUpdate = true;
+      p.dirty = false;
     }
     for (const r of this.rings) { r.active = false; r.mesh.visible = false; }
     for (const f of this.flashes) { f.active = false; f.mesh.visible = false; }
@@ -662,6 +682,14 @@ export class Trail {
   private alpha: Float32Array;
   private n: number;
   private mat: THREE.ShaderMaterial;
+  private _dir = new THREE.Vector3();
+  private _toCam = new THREE.Vector3();
+  private _side = new THREE.Vector3();
+
+  /** live recolour (per-skin VFX themes) */
+  setColor(hex: number): void {
+    (this.mat.uniforms.uColor.value as THREE.Color).setHex(hex);
+  }
 
   constructor(scene: THREE.Scene, segments = 26, color = 0x9fd0ff, width = 0.5) {
     this.n = segments;
@@ -732,9 +760,7 @@ export class Trail {
     if (strength <= 0.02) return;
 
     const camPos = camera.position;
-    const dir = new THREE.Vector3();
-    const toCam = new THREE.Vector3();
-    const side = new THREE.Vector3();
+    const dir = this._dir, toCam = this._toCam, side = this._side;
 
     for (let i = 0; i < this.n; i++) {
       const cur = this.pts[i];

@@ -36,6 +36,9 @@ import animsUrl from "../assets/anims.json?url";
 const MODEL_SCALE = 1;
 const MODEL_Y_OFFSET = 0;
 const MODEL_FACING_FIX = 0;
+/** setAura morph scratch (upright egg <-> flight loaf targets) */
+const _auraPos = new THREE.Vector3();
+const _auraScale = new THREE.Vector3(1, 1, 1);
 
 /** Virtual joint -> file bone. Limb sides SWAPPED (game-L = file-R, see header). */
 const BONE_NAMES: Record<JointName, string> = {
@@ -115,6 +118,8 @@ export interface HeroVisual {
   fistL: THREE.Object3D;
   fistR: THREE.Object3D;
   chestAnchor: THREE.Object3D;
+  /** between the eyes (vision-beam origin) — tracks the head bone */
+  eyeAnchor: THREE.Object3D;
   cape: THREE.Group | null;
   setPoseImmediate(pose: Pose): void;
   blendPose(pose: Pose, k: number): void;
@@ -145,6 +150,7 @@ export class GLTFHeroRig implements HeroVisual {
   fistL = new THREE.Object3D();
   fistR = new THREE.Object3D();
   chestAnchor = new THREE.Object3D();
+  eyeAnchor = new THREE.Object3D();
   cape: THREE.Group | null = null;
 
   private ready = false;
@@ -221,15 +227,16 @@ export class GLTFHeroRig implements HeroVisual {
     });
     this.auraGeo = new THREE.SphereGeometry(1.5, 18, 14);
     this.aura = new THREE.Mesh(this.auraGeo, this.auraMat);
-    this.aura.position.y = 1.7;
-    this.aura.scale.set(0.8, 1.15, 0.8);
+    this.aura.position.set(0, 1.6, 0.1);
+    this.aura.scale.set(0.95, 1.15, 0.95);
     this.aura.visible = false;
     this.group.add(this.aura);
 
     this.fistL.position.set(0.3, 1.1, 0.2);
     this.fistR.position.set(-0.3, 1.1, 0.2);
     this.chestAnchor.position.set(0, 1.5, 0.25);
-    this.body.add(this.fistL, this.fistR, this.chestAnchor);
+    this.eyeAnchor.position.set(0, 2.95, 0.25);
+    this.body.add(this.fistL, this.fistR, this.chestAnchor, this.eyeAnchor);
 
     new GLTFLoader().load(
       modelUrl,
@@ -306,6 +313,8 @@ export class GLTFHeroRig implements HeroVisual {
     if (this.bones.wrL) { this.fistL.position.set(0, 0.05, 0.08); this.bones.wrL.add(this.fistL); }
     if (this.bones.wrR) { this.fistR.position.set(0, 0.05, 0.08); this.bones.wrR.add(this.fistR); }
     if (this.bones.chest) { this.chestAnchor.position.set(0, 0.15, 0.12); this.bones.chest.add(this.chestAnchor); }
+    // bone space is x1.6-scaled: (0,0.10,0.13) ~= 0.16 up / 0.21 fwd of the head joint (goggle line)
+    if (this.bones.head) { this.eyeAnchor.position.set(0, 0.10, 0.13); this.bones.head.add(this.eyeAnchor); }
 
     this.body.add(scene);
     this.modelRoot = scene;
@@ -783,6 +792,15 @@ export class GLTFHeroRig implements HeroVisual {
     this.aura.visible = on && strength > 0.001;
     this.auraMat.color.setHex(color);
     this.auraMat.opacity = strength;
+    // v6.5: the shell fits the pose — horizontal loaf around the prone body in
+    // flight, upright egg otherwise (the old egg stayed vertical in flight and
+    // the head/fists poked out).
+    const baseName = this.baseClip === "loco" ? this.locoClip : this.baseClip;
+    const fly = baseName === "flyM" || baseName === "diveM";
+    _auraPos.set(fly ? 0 : 0, fly ? 1.8 : 1.6, fly ? -0.05 : 0.1);
+    _auraScale.set(fly ? 0.8 : 0.95, fly ? 0.62 : 1.15, fly ? 1.3 : 0.95);
+    this.aura.position.lerp(_auraPos, 0.2);
+    this.aura.scale.lerp(_auraScale, 0.2);
   }
 
   /** This model has no cape — harmless no-op for API parity. */

@@ -16,4 +16,6 @@ check("menu pitch level (-0.2)", E.includes("lerp(this.rig.body.rotation.x, -0.2
 check("heroModel: fly->flyM loop", H.includes('pose === POSES.fly || pose === POSES.slamUp || pose === POSES.slamDown) { this.requestBase("flyM", false, xf);'));
 check("heroModel: fist/dash->diveM hold", H.includes('pose === POSES.fist || pose === POSES.dash) { this.requestBase("diveM", true, xf);'));
 check("heroModel: flyM gaze -0.72", H.includes('baseName === "flyM" ? -0.72'));
+check("v6.5: steering right = fwd x up (left/right not inverted)",
+  E.includes("this._right.set(-this._fwd.z, 0, this._fwd.x);") && !E.includes("this._right.set(this._fwd.z, 0, -this._fwd.x);"));
 process.exit(fail ? 1 : 0);

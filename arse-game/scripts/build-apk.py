@@ -32,8 +32,8 @@ from cryptography.x509.oid import NameOID
 
 PKG = "com.aloarse.arsegame"
 APP_LABEL = "آرس"
-VERSION_CODE = 12
-VERSION_NAME = "6.4"
+VERSION_CODE = 13
+VERSION_NAME = "6.5"
 MIN_SDK = 21
 TARGET_SDK = 29  # forgiving: no R+ resources.arsc rules, no edge-to-edge enforcement
 SPLASH_BG = "#060A1A"
