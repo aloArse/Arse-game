@@ -31,11 +31,11 @@ from cryptography.hazmat.primitives.serialization import pkcs7
 from cryptography.x509.oid import NameOID
 
 PKG = "com.aloarse.arsegame"
-APP_LABEL = "Arse Game"
-VERSION_CODE = 4
-VERSION_NAME = "4.0"
+APP_LABEL = "آرس"
+VERSION_CODE = 5
+VERSION_NAME = "4.1"
 MIN_SDK = 21
-TARGET_SDK = 33  # <34 avoids forced edge-to-edge; v2 sig satisfies 11+
+TARGET_SDK = 29  # forgiving: no R+ resources.arsc rules, no edge-to-edge enforcement
 SPLASH_BG = "#060A1A"
 DEX_PATH = "/tmp/nitron/package/template/base.apk"
 HTML_PATH = os.path.join(os.path.dirname(__file__), "..", "dist", "index.html")
@@ -178,7 +178,7 @@ class Axml:
                 body = struct.pack("<IIIIHHHHHH", line, 0xFFFFFFFF, 0xFFFFFFFF,
                                    new_idx(name), attr_start, attr_size, attr_count, 0, 0, 0)
                 body += b"".join(attrs)
-                out.append(struct.pack("<HHI", 0x0102, 16, 16 + len(body)) + body)
+                out.append(struct.pack("<HHI", 0x0102, 16, 8 + len(body)) + body)
             elif ctype == 0x0103:  # end element
                 line, _c, _ns, name = struct.unpack("<IIII", ch[8:24])
                 body = struct.pack("<IIII", line, 0xFFFFFFFF, 0xFFFFFFFF, new_idx(name))
@@ -380,10 +380,26 @@ def v2_block(apk_without_block: bytes, key, cert) -> bytes:
     return block
 
 
+def load_template_dex():
+    """classes.dex from inside the nitron template APK (NOT the apk itself!).
+
+    A previous build accidentally embedded the whole base.apk zip as
+    classes.dex -> 'App not installed' on device. Guard with magic checks.
+    """
+    with zipfile.ZipFile(DEX_PATH) as z:
+        dex = z.read("classes.dex")
+    assert dex[:4] == b"dex\n", f"template classes.dex is not a dex: {dex[:8]!r}"
+    import zlib
+    hdr = struct.unpack("<II", dex[32:40])
+    assert hdr[0] == len(dex), "dex size field mismatch"
+    assert (zlib.adler32(dex[12:]) & 0xFFFFFFFF) == struct.unpack("<I", dex[8:12])[0], "dex adler mismatch"
+    return dex
+
+
 def build_apk(out_path):
     key, cert = get_key_cert()
     manifest = build_manifest()
-    dex = open(DEX_PATH, "rb").read()
+    dex = load_template_dex()
     html = open(HTML_PATH, "rb").read()
 
     entries = [
