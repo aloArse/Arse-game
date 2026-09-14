@@ -485,7 +485,7 @@ export class GLTFHeroRig implements HeroVisual {
       if (edge) this.fireOneShot(HIT_ROUTE, 1);
       this.requestBase("neutral", false, xf);
     } else if (pose === POSES.fly || pose === POSES.slamUp || pose === POSES.slamDown) { this.requestBase("flyM", false, xf); this.noteSel("fly"); }
-    else if (pose === POSES.fist || pose === POSES.dash) { this.requestBase("swimM", false, xf); this.noteSel("swim"); }
+    else if (pose === POSES.fist || pose === POSES.dash) { this.requestBase("diveM", true, xf); this.noteSel("dive"); }
     else if (pose === POSES.spin) { this.requestBase("spinM", false, xf); this.noteSel("spin"); }
     else if (pose === POSES.grab) { this.requestBase("grabM", false, xf); this.noteSel("grab"); }
     else {
@@ -739,10 +739,10 @@ export class GLTFHeroRig implements HeroVisual {
         bone.quaternion.premultiply(tmp);
       }
     }
-    // flight gaze: fly/swim mocap stares at the water — pitch neck+head up so the
+    // flight gaze: fly/dive mocap stares at the water — pitch neck+head up so the
     // hero looks where he's going (ramped with the base crossfade, no popping)
     const baseName = this.baseClip === "loco" ? this.locoClip : this.baseClip;
-    const lookT = baseName === "flyM" ? -0.72 : baseName === "swimM" ? -0.95 : 0;
+    const lookT = baseName === "flyM" ? -0.72 : baseName === "diveM" ? -1.5 : 0;
     if (lookT !== 0) {
       const w = this.prevClip && this.prevW > 0.001 ? 1 - this.prevW : 1;
       if (this.bones.neck) {

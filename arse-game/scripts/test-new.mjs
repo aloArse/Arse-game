@@ -1,4 +1,4 @@
-// Verify the 4 new flight/ability mocap clips (flyM/swimM/spinM/grabM).
+// Verify the 4 new flight/ability mocap clips (flyM/diveM/spinM/grabM).
 // Run: node scripts/test-new.mjs
 function makeImg(){const l={};const i={width:4,height:4,complete:false,_src:"",style:{},
 addEventListener(t,f){(l[t]=l[t]||[]).push(f)},removeEventListener(t,f){l[t]=(l[t]||[]).filter(x=>x!==f)},
@@ -65,23 +65,30 @@ const stripped=c=>{let m=0;for(const h of A.clips[c].hips)m=Math.max(m,Math.hypo
   check("flyM: root travel stripped",stripped("flyM")<0.05,`${stripped("flyM").toFixed(3)}m`);
   check("flyM: joints sane",bad.length===0,bad.slice(0,3).join(" "));
 }
-// ---- swimM: breaststroke flight, horizontal, arms sweep, legs kick ----
+// ---- diveM: streamline hold (menu/dash) — arms past head, body straight, legs back ----
 {
-  const N=24,hLz=[],hRz=[],fx=[],fy=[];let minUpZ=1,bad=[];
-  for(let i=0;i<N;i++){pose("swimM",(A.clips.swimM.dur*i)/N);
-    const up=new THREE.Vector3(0,1,0).applyQuaternion(hipsQ());minUpZ=Math.min(minUpZ,up.z);
-    const hips=P("Hips_01");
-    hLz.push(P("handL_010").z-hips.z);hRz.push(P("handR_029").z-hips.z);
-    fx.push(P("footL_047").x-P("footR_051").x);fy.push(P("footL_047").y-hips.y);
-    bad=bad.concat(jointLines().map(j=>`swimM@${i}:${j}`));}
-  const corr=(a,b)=>{const ma=a.reduce((s,v)=>s+v,0)/a.length,mb=b.reduce((s,v)=>s+v,0)/b.length;let s=0,sa=0,sb=0;for(let i=0;i<a.length;i++){s+=(a[i]-ma)*(b[i]-mb);sa+=(a[i]-ma)**2;sb+=(b[i]-mb)**2}return s/Math.sqrt(sa*sb+1e-9)};
-  check("swimM: body horizontal face-down",minUpZ>0.85,`minUpZ=${minUpZ.toFixed(2)}`);
-  check("swimM: arms sweep fwd-back",range(hLz)>0.5&&range(hRz)>0.5,`L=${range(hLz).toFixed(2)} R=${range(hRz).toFixed(2)}m`);
-  check("swimM: breaststroke symmetric",corr(hLz,hRz)>0.7,`corr=${corr(hLz,hRz).toFixed(2)}`);
-  check("swimM: legs kick",range(fx)>0.3||range(fy)>0.3,`spread=${range(fx).toFixed(2)} lift=${range(fy).toFixed(2)}`);
-  check("swimM: loops cleanly",A.clips.swimM.snap<3,`snap=${A.clips.swimM.snap}°`);
-  check("swimM: root travel stripped",stripped("swimM")<0.05,`${stripped("swimM").toFixed(3)}m`);
-  check("swimM: joints sane",bad.length===0,bad.slice(0,3).join(" "));
+  pose("diveM",A.clips.diveM.dur-0.001); // hold frame (last)
+  const hips=P("Hips_01"),head=P("Head_06"),hL=P("handL_010"),hR=P("handR_029");
+  const fL=P("footL_047"),fR=P("footR_051"),tL=P("toeL_048");
+  const axis=head.clone().sub(hips).normalize(); // head-first dive axis
+  const pastHead=(h)=>h.clone().sub(hips).dot(axis)>head.clone().sub(hips).length();
+  const armLine=(h)=>{const u=head.clone().sub(hips).normalize(),v=h.clone().sub(head).normalize();return Math.acos(Math.min(1,u.dot(v)))};
+  const knee=(t,s,f)=>{const u=P(s).sub(P(t)).normalize(),v=P(f).sub(P(s)).normalize();return Math.acos(Math.min(1,u.dot(v)))};
+  const spread=Math.abs(hL.x-hR.x),legSpread=Math.abs(fL.x-fR.x);
+  const nAx=axis.clone().negate();
+  const toeExt=tL.clone().sub(hips).dot(nAx)-fL.clone().sub(hips).dot(nAx);
+  const bad=jointLines(0.5); // diver's right elbow leads slightly (authentic mocap)
+  const hq=hipsQ();const face=new THREE.Vector3(0,0,1).applyQuaternion(F("Head_06").getWorldQuaternion(new THREE.Quaternion()));
+  console.log(`INFO  diveM hold: face=(${face.x.toFixed(2)},${face.y.toFixed(2)},${face.z.toFixed(2)}) (gaze offset applied at runtime)`);
+  check("diveM: hands extended past head",pastHead(hL)&&pastHead(hR),`${hL.clone().sub(hips).length().toFixed(2)}/${hR.clone().sub(hips).length().toFixed(2)}m vs head ${head.clone().sub(hips).length().toFixed(2)}m`);
+  check("diveM: hands together (streamline)",spread<0.7,`spread=${spread.toFixed(2)}m`);
+  check("diveM: arms continue body line",armLine(hL)<0.5&&armLine(hR)<0.5,`${armLine(hL).toFixed(2)}/${armLine(hR).toFixed(2)}rad`);
+  check("diveM: legs straight back",knee("thighL_045","shinL_046","footL_047")<0.5&&knee("thighR_049","shinR_050","footR_051")<0.5,`${knee("thighL_045","shinL_046","footL_047").toFixed(2)}/${knee("thighR_049","shinR_050","footR_051").toFixed(2)}rad`);
+  check("diveM: legs together",legSpread<0.7,`spread=${legSpread.toFixed(2)}m`);
+  check("diveM: one-shot hold clip",A.clips.diveM.loop===false&&A.clips.diveM.frames.length<=10,`${A.clips.diveM.frames.length} frames`);
+  check("diveM: root stripped",stripped("diveM")<0.01,`${stripped("diveM").toFixed(3)}m`);
+  check("diveM: toes pointed",toeExt>0.03,`ext=${toeExt.toFixed(2)}m`);
+  check("diveM: joints sane",bad.length===0,bad.slice(0,3).join(" "));
 }
 // ---- spinM: airborne 360° spinning kick, upright ----
 {

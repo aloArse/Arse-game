@@ -67,6 +67,7 @@ const CLIPS = [
   ["swimM", "Liam@swimming.fbx", null, "y", true],
   ["spinM", "Liam@hurricane_kick.fbx", [0, 0.4575], "none", true],
   ["grabM", "Liam@carrying.fbx", [1.0, 2.1], "none", true],
+  ["diveM", "Liam@run_to_dive.fbx", [0.9, 1.15], "none", false],
 ];
 
 

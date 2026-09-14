@@ -579,7 +579,7 @@ export class Engine {
 
     this.rig.group.position.copy(this.pos);
     this.rig.group.rotation.set(0, this.yaw, 0);
-    this.rig.body.rotation.x = lerp(this.rig.body.rotation.x, 0.05, 1 - Math.exp(-3 * dt));
+    this.rig.body.rotation.x = lerp(this.rig.body.rotation.x, -1.0, 1 - Math.exp(-3 * dt));
     this.rig.body.rotation.z = Math.sin(this.t * 0.6) * 0.12;
     this.rig.blendPose(POSES.fist, Math.min(1, dt * 4));
     this.rig.addFlutter(this.t, 0.7);
@@ -1104,7 +1104,8 @@ export class Engine {
       this.slamPhase === "dive" || this.slamPhase === "pdDive" ? 0.75 :
         this.slamPhase === "rise" || this.slamPhase === "pdRise" ? -0.35 :
           this.cycloneT > 0 ? 0.1 :
-            this.flyK * (0 - climb * 0.55) + (1 - this.flyK) * (vert > 0 ? -0.12 : 0.06);
+            this.dashT > 0 || (this.flyK > 0.55 && this.cruise > 0.5) ? -1.0 - climb * 0.5 :
+              this.flyK * (0 - climb * 0.55) + (1 - this.flyK) * (vert > 0 ? -0.12 : 0.06);
     this.rig.body.rotation.x = lerp(this.rig.body.rotation.x, pitchTarget, 1 - Math.exp(-7 * dt));
 
     // bank/roll into turns
@@ -1922,8 +1923,8 @@ export class Engine {
       g.obj.position.lerp(this._v2, Math.min(1, dt * 20));
     } else {
       this._v2.copy(this.pos)
-        .addScaledVector(this._aim, 3.4 + g.r * 0.6);
-      this._v2.y += 0.6;
+        .addScaledVector(this._aim, 0.55 + g.r * 0.85);
+      this._v2.y += 1.5 + g.r * 0.25;
       g.obj.position.lerp(this._v2, Math.min(1, dt * 16));
     }
     g.v.set(0, 0, 0);

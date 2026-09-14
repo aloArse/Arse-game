@@ -33,7 +33,9 @@ const restHips = F("Hips_01").position.clone();
 const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion();
 function sampleClip(clip: string, t: number, pitch: number): void {
   const c = A.clips[clip];
-  const tt = ((t % c.dur) + c.dur) % c.dur;
+  const tt = c.loop
+    ? ((t % c.dur) + c.dur) % c.dur
+    : Math.min(Math.max(t, 0), c.dur - 1e-4);
   const f = (tt / c.dur) * (c.frames.length - 1);
   const i0 = Math.floor(f), i1 = Math.min(c.frames.length - 1, i0 + 1), u = f - i0;
   const F0 = c.frames[i0], F1 = c.frames[i1];
@@ -51,8 +53,8 @@ function sampleClip(clip: string, t: number, pitch: number): void {
     restHips.y + H0[1] + (H1[1] - H0[1]) * u,
     restHips.z + H0[2] + (H1[2] - H0[2]) * u);
   // flight gaze offset (== heroModel commit, converged w=1)
-  if (clip === "flyM" || clip === "swimM") {
-    const T = clip === "flyM" ? -0.72 : -0.95;
+  if (clip === "flyM" || clip === "diveM") {
+    const T = clip === "flyM" ? -0.72 : -1.5;
     _qa.setFromEuler(new THREE.Euler(T * 0.4, 0, 0));
     F("NEck_05").quaternion.premultiply(_qa);
     _qa.setFromEuler(new THREE.Euler(T * 0.6, 0, 0));
@@ -82,6 +84,11 @@ function faceBody(): THREE.Vector3 {
   const qb = body.getWorldQuaternion(new THREE.Quaternion()).invert();
   return new THREE.Vector3(0, 0, 1).applyQuaternion(qh).applyQuaternion(qb);
 }
+function faceWorld(): THREE.Vector3 {
+  // gaze in WORLD space (engine pitch applied) — where the hero actually looks
+  const qh = F("Head_06").getWorldQuaternion(new THREE.Quaternion());
+  return new THREE.Vector3(0, 0, 1).applyQuaternion(qh);
+}
 function hipsUpBody(): THREE.Vector3 {
   const qh = F("Hips_01").getWorldQuaternion(new THREE.Quaternion());
   const qb = body.getWorldQuaternion(new THREE.Quaternion()).invert();
@@ -95,21 +102,21 @@ function hipsUpBody(): THREE.Vector3 {
     && Array.isArray((POSES as Record<string, Record<string, unknown>>)[n].shL));
   check("enemy POSES identities+values intact", ok, names.join(","));
 }
-// ---- menu/cruise-fast: swimM breaststroke, pitch 0.05 ----
+// ---- menu/cruise-fast: diveM streamline hold, pitch -1.0 ----
 {
-  sampleClip("swimM", 0, 0.05);
-  const h0L = WP("handR_029"), h0R = WP("handL_010"), f0L = WP("footR_051");
-  sampleClip("swimM", 1.1, 0.05);
-  const h1L = WP("handR_029"), h1R = WP("handL_010"), f1L = WP("footR_051");
+  sampleClip("diveM", A.clips.diveM.dur, -1.0); // engine holds the last frame
+  const hL = WP("handR_029"), hR = WP("handL_010");
+  const fL = WP("footR_051"), fR = WP("footL_047");
   const head = WP("Head_06"), hips = WP("Hips_01");
-  const up = hipsUpBody();
-  const fd = faceBody();
-  check("menu: body horizontal face-down", up.z > 0.85, `upZ=${up.z.toFixed(2)}`);
+  const gw = faceWorld();
   check("menu: head leads forward (world)", head.z - hips.z > 0.5, `+${(head.z - hips.z).toFixed(2)}`);
-  check("menu: stroke alive (hands move)", h0L.distanceTo(h1L) > 0.25 && h0R.distanceTo(h1R) > 0.25,
-    `${h0L.distanceTo(h1L).toFixed(2)}/${h0R.distanceTo(h1R).toFixed(2)}m`);
-  check("menu: kick alive (feet move)", f0L.distanceTo(f1L) > 0.15, `${f0L.distanceTo(f1L).toFixed(2)}m`);
-  check("menu: gaze forward", fd.z > 0.85 && Math.abs(fd.y) < 0.4, `(${fd.x.toFixed(2)},${fd.y.toFixed(2)},${fd.z.toFixed(2)})`);
+  check("menu: fists past head (world)", hL.z - head.z > 0.1 && hR.z - head.z > 0.1,
+    `L+${(hL.z - head.z).toFixed(2)} R+${(hR.z - head.z).toFixed(2)}`);
+  check("menu: fists together", Math.abs(hL.x - hR.x) < 0.8, `spread=${Math.abs(hL.x - hR.x).toFixed(2)}`);
+  check("menu: legs trail back together", hips.z - fL.z > 0.5 && hips.z - fR.z > 0.5 && Math.abs(fL.x - fR.x) < 0.7,
+    `${(hips.z - fL.z).toFixed(2)}/${(hips.z - fR.z).toFixed(2)} spread=${Math.abs(fL.x - fR.x).toFixed(2)}`);
+  check("menu: level flight", Math.abs(head.y - hips.y) < 0.6, `dy=${(head.y - hips.y).toFixed(2)}`);
+  check("menu: gaze forward (world)", gw.z > 0.85 && Math.abs(gw.y) < 0.4, `(${gw.x.toFixed(2)},${gw.y.toFixed(2)},${gw.z.toFixed(2)})`);
 }
 // ---- cruise fly: flyM superman, pitch 0 ----
 {
@@ -125,17 +132,19 @@ function hipsUpBody(): THREE.Vector3 {
   check("fly: legs trail behind", hips.z - fL.z > 0.5 && hips.z - fR.z > 0.5, `${(hips.z - fL.z).toFixed(2)}/${(hips.z - fR.z).toFixed(2)}`);
   check("fly: gaze forward", fd.z > 0.85 && Math.abs(fd.y) < 0.4, `(${fd.x.toFixed(2)},${fd.y.toFixed(2)},${fd.z.toFixed(2)})`);
 }
-// ---- dash: swimM burst, pitch 0 ----
+// ---- dash: diveM missile hold, pitch -1.0 ----
 {
-  sampleClip("swimM", 2.2, 0);
-  const h0 = WP("handR_029").clone();
-  sampleClip("swimM", 3.3, 0);
-  const moved = WP("handR_029").distanceTo(h0);
+  sampleClip("diveM", A.clips.diveM.dur, -1.0);
+  const hL = WP("handR_029"), hR = WP("handL_010");
+  const fL = WP("footR_051"), fR = WP("footL_047");
   const head = WP("Head_06"), hips = WP("Hips_01");
-  const up = hipsUpBody();
-  check("dash: body horizontal face-down", up.z > 0.85, `upZ=${up.z.toFixed(2)}`);
-  check("dash: stroke alive", moved > 0.25, `${moved.toFixed(2)}m`);
-  check("dash: head leads forward", head.z - hips.z > 0.5, `+${(head.z - hips.z).toFixed(2)}`);
+  const gw = faceWorld();
+  check("dash: fists past head (world)", hL.z - head.z > 0.1 && hR.z - head.z > 0.1,
+    `L+${(hL.z - head.z).toFixed(2)} R+${(hR.z - head.z).toFixed(2)}`);
+  check("dash: body straight (head past hips)", head.z - hips.z > 0.5 && hips.z - fL.z > 0.5,
+    `head+${(head.z - hips.z).toFixed(2)} feet-${(hips.z - fL.z).toFixed(2)}`);
+  check("dash: level missile", Math.abs(hL.y - fL.y) < 0.9, `dy=${(hL.y - fL.y).toFixed(2)}`);
+  check("dash: gaze forward (world)", gw.z > 0.85 && Math.abs(gw.y) < 0.4, `(${gw.x.toFixed(2)},${gw.y.toFixed(2)},${gw.z.toFixed(2)})`);
 }
 // ---- spin: spinM cyclone, pitch 0.1 ----
 {

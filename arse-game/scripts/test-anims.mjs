@@ -88,7 +88,7 @@ function jointLines(elbowTol = 0.35) {
     for (const h of c.hips) for (const v of h) if (!isFinite(v)) nan++;
   }
   check("no NaN in baked data", nan === 0);
-  check("expected clips present", ["idle", "walk", "run", "sprint", "hover", "punch", "punchM", "cross", "uppercut", "uppercutM", "kick", "hit", "cast1", "cast2", "throw", "bash", "snatch", "land", "block", "fightIdle", "punchFlurry", "punchFlurryM", "hookFlurry", "flyM", "swimM", "spinM", "grabM"].every((k) => ANIMS.clips[k]));
+  check("expected clips present", ["idle", "walk", "run", "sprint", "hover", "punch", "punchM", "cross", "uppercut", "uppercutM", "kick", "hit", "cast1", "cast2", "throw", "bash", "snatch", "land", "block", "fightIdle", "punchFlurry", "punchFlurryM", "hookFlurry", "flyM", "diveM", "spinM", "grabM"].every((k) => ANIMS.clips[k]));
   check("postbake meta", !!(ANIMS.meta && ANIMS.meta.postbaked && ANIMS.meta.offsets && ANIMS.meta.offsets.walk && ANIMS.meta.offsets.run && ANIMS.meta.offsets.sprint));
 }
 
@@ -187,10 +187,10 @@ function excursion(clip, bone, axis) {
   check("fightIdle: lead hand forward", P("handL_010").z - P("Chest_04").z > 0.15, `lead=${(P("handL_010").z - P("Chest_04").z).toFixed(2)}m`);
   // joint lines across all one-shots
   let bad = [];
-  for (const name of ["punch", "punchM", "cross", "uppercut", "uppercutM", "kick", "cast1", "cast2", "throw", "bash", "snatch", "land", "hit", "block", "fightIdle", "idle", "hover", "punchFlurry", "punchFlurryM", "hookFlurry", "flyM", "swimM", "spinM", "grabM"]) {
+  for (const name of ["punch", "punchM", "cross", "uppercut", "uppercutM", "kick", "cast1", "cast2", "throw", "bash", "snatch", "land", "hit", "block", "fightIdle", "idle", "hover", "punchFlurry", "punchFlurryM", "hookFlurry", "flyM", "diveM", "spinM", "grabM"]) {
     const c = ANIMS.clips[name];
     // strike/grapple clips have authentic elbow-lead (throw), wrap (snatch), elbow-strikes (uppercut), whirl-arms (spinM)
-    const tol = (name === "uppercut" || name === "uppercutM") ? 0.92 : name === "snatch" ? 0.8 : (name === "throw" || name === "spinM") ? 0.6 : 0.35;
+    const tol = (name === "uppercut" || name === "uppercutM") ? 0.92 : name === "snatch" ? 0.8 : (name === "throw" || name === "spinM") ? 0.6 : name === "diveM" ? 0.5 : 0.35;
     for (let i = 0; i <= 8; i++) { pose(name, (c.dur * i) / 8); bad = bad.concat(jointLines(tol).map((j) => `${name}@${i}:${j}`)); }
   }
   check("no hyper-extension anywhere", bad.length === 0, bad.slice(0, 4).join(" "));
