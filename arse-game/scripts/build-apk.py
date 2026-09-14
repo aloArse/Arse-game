@@ -32,8 +32,8 @@ from cryptography.x509.oid import NameOID
 
 PKG = "com.aloarse.arsegame"
 APP_LABEL = "آرس"
-VERSION_CODE = 7
-VERSION_NAME = "5.1"
+VERSION_CODE = 8
+VERSION_NAME = "6.0"
 MIN_SDK = 21
 TARGET_SDK = 29  # forgiving: no R+ resources.arsc rules, no edge-to-edge enforcement
 SPLASH_BG = "#060A1A"
@@ -461,7 +461,8 @@ def build_apk(out_path):
 
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "dist/arse-game.apk"
-    if not os.path.exists(DEX_PATH):
+    repo_dex = os.path.join(os.path.dirname(__file__), "nitron-classes.dex")
+    if not os.path.exists(DEX_PATH) and not os.path.exists(repo_dex):
         subprocess.run(["mkdir", "-p", "/tmp/nitron"], check=True)
         print("!! template dex missing — re-fetch nitron tarball first", file=sys.stderr)
         sys.exit(1)

@@ -720,6 +720,8 @@ export class Engine {
     this.rig.group.position.copy(this.pos);
     this.rig.body.rotation.x += raw * 3;
     this.rig.blendPose(POSES.hurt, Math.min(1, raw * 5));
+    this.rig.addFlutter(this.t, 0.15);
+    this.rig.updateClip(dt);
     this.fistTrailL.update(this.pos, this.camera, 0);
     this.fistTrailR.update(this.pos, this.camera, 0);
     this.updateCamera(raw, true);
@@ -745,7 +747,7 @@ export class Engine {
     if (this.comboWindow <= 0) { this.comboStep = 0; this.flurryOn = false; }
     if (this.clapT > 0) {
       this.clapT -= dt;
-      if (!this.clapFired && this.clapT <= 0.18) { this.clapFired = true; this.thunderClap(); }
+      if (!this.clapFired && this.clapT <= 0.07) { this.clapFired = true; this.thunderClap(); }
       if (this.clapT <= 0) this.clapT = 0;
     }
     this.updateGrab(dt);
@@ -928,7 +930,7 @@ export class Engine {
         } else {
           const spd = Math.hypot(this.vel.x, this.vel.z);
           const prevPhase = Math.sin(this.walkT);
-          this.walkT += dt * (5 + spd * 0.62);
+          this.walkT += dt * this.rig.locoRate(spd);
           // a footfall every half cycle → dust puff + sparks when sprinting
           if (spd > 4 && Math.sin(this.walkT) < 0 && prevPhase >= 0) {
             this.fx.smoke(this.pos.x, this.pos.y - 1, this.pos.z, 1, 2.6, 1.2, 0x9a9098, 0.9);
@@ -1069,7 +1071,7 @@ export class Engine {
     else if (this.grounded) {
       // on foot: procedural walk/run cycle or combat stance
       const gSpd = Math.hypot(this.vel.x, this.vel.z);
-      pose = gSpd > 1.2 ? this.rig.walkPose(this.walkT, clamp(gSpd / 23, 0.25, 1)) : POSES.stand;
+      pose = gSpd > 1.2 ? this.rig.walkPose(this.walkT, gSpd) : POSES.stand;
       blend = 11;
     }
     else { pose = (moveMag > 0.05 || Math.abs(vert) > 0.05 || threatNear) ? POSES.idleFight : POSES.idle; blend = 5; }
@@ -1120,7 +1122,7 @@ export class Engine {
     this.rig.body.rotation.z = this.roll;
 
     // hover bob when drifting slowly
-    this.rig.body.position.y = Math.sin(this.t * 1.9) * 0.09 * (1 - this.flyK);
+    this.rig.body.position.y = this.grounded ? 0 : Math.sin(this.t * 1.9) * 0.09 * (1 - this.flyK);
 
     this.rig.group.position.copy(this.pos);
     // cyclone adds a fast spin on top of the facing yaw
@@ -1384,7 +1386,7 @@ export class Engine {
     this.dashT = Math.max(this.dashT, 0.13);
     this.punchT = 0.2;
     this.punchSide = 0;
-    this.rig.playClip("jabR", 1.7);
+    this.rig.playClip("kickHit", 1.7);
 
     const hitPos = this._v.copy(this.pos).addScaledVector(this.dashDir, 3.4);
     const dmg = od ? 110 : 62;
@@ -1554,7 +1556,7 @@ export class Engine {
     mesh.position.copy(from);
     this.scene.add(mesh);
     this.meteors.push({ active: true, t: 0, from, to: target.clone(), mesh });
-    this.rig.playClip("blastFire", 1.15);
+    this.rig.playClip("meteorCast", 1.0);
     audio.play("charge", 1);
     this.setMsg("شهاب‌سنگ در راه است!", 1.2, "warn");
   }
