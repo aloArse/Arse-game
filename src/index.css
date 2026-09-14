@@ -107,10 +107,16 @@ canvas { display: block; }
 
 /* ---------- Ability buttons ---------- */
 .abtn {
-  position: relative;
+  /* NOTE: no position here — buttons are `absolute` (Tailwind utility), and
+     unlayered CSS would override that utility. An absolutely-positioned
+     button is already a containing block for the cd-sweep overlay. */
   border-radius: 9999px;
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px;
   color: #eaf0ff;
   background:
     radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.22), transparent 42%),

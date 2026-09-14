@@ -20,6 +20,7 @@ export default function App() {
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState<string | null>(null);
   const [bootAttempt, setBootAttempt] = useState(0);
+  const [wideWarn, setWideWarn] = useState(false);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -78,6 +79,19 @@ export default function App() {
     return () => window.removeEventListener("keydown", fn);
   }, [paused]);
 
+  // Detect "Desktop site" mode on a phone (page renders tiny + wrong layout)
+  useEffect(() => {
+    const check = () => {
+      const touch = navigator.maxTouchPoints > 0;
+      const smallScreen = Math.min(window.screen.width, window.screen.height) <= 620;
+      const wideViewport = window.innerWidth >= 700;
+      setWideWarn(touch && smallScreen && wideViewport);
+    };
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
   useEffect(() => {
     const fn = () => { if (document.hidden) setPaused(true); };
     document.addEventListener("visibilitychange", fn);
@@ -123,6 +137,20 @@ export default function App() {
 
       {/* filmic overlay */}
       <div className="vignette-soft pointer-events-none absolute inset-0" />
+
+      {wideWarn && (
+        <button
+        onClick={() => setWideWarn(false)}
+        className="absolute left-1/2 top-4 z-50 w-[min(520px,92vw)] -translate-x-1/2 rounded-xl border border-amber-300/40 bg-[#241a08]/95 p-3 text-center shadow-2xl"
+      >
+        <div className="font-hud text-[13px] font-bold leading-7 text-amber-200" dir="rtl">
+          ⚠️ صفحه کوچک به‌نظر می‌رسد — حالت «نسخهٔ دسکتوب سایت» کروم روشن است.
+          <br />
+          منوی ⋮ کروم ← تیک <b>Desktop site</b> را بردارید و صفحه را رفرش کنید.
+        </div>
+        <div className="mt-1 font-hud text-[10px] tracking-[0.2em] text-amber-100/50">(TAP TO DISMISS)</div>
+      </button>
+      )}
 
       {booting && (
         <div className="absolute inset-0 z-40 grid place-items-center bg-[#060a1a]">

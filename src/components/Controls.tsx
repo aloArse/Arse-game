@@ -23,6 +23,27 @@ export default function Controls({ game }: { game: Engine }) {
   const visionBtnRef = useRef<HTMLButtonElement>(null);
   const maxedRef = useRef(false);
 
+  /* ---------- auto-scale: the cluster always fits the actual screen ---------- */
+  const [scale, setScale] = useState(1);
+  useEffect(() => {
+    const compute = () => {
+      const w = window.innerWidth, h = window.innerHeight;
+      const portrait = h >= w;
+      const designW = portrait ? 232 : 286;
+      const designH = portrait ? 452 : 252;
+      const availW = portrait ? w * 0.66 : w * 0.8;
+      const availH = h * 0.82;
+      setScale(Math.max(0.5, Math.min(1, availW / designW, availH / designH)));
+    };
+    compute();
+    window.addEventListener("resize", compute);
+    window.addEventListener("orientationchange", compute);
+    return () => {
+      window.removeEventListener("resize", compute);
+      window.removeEventListener("orientationchange", compute);
+    };
+  }, []);
+
   /* ---------- live cooldown painting (rAF, no react churn) ---------- */
   useEffect(() => {
     let raf = 0;
@@ -177,7 +198,7 @@ export default function Controls({ game }: { game: Engine }) {
 
   const hint = (t: string) => <span className="key-hint kbd-only">{t}</span>;
   const label = (t: string) => (
-    <span className="pointer-events-none absolute -bottom-[13px] left-0 right-0 text-center font-hud text-[8.5px] font-bold tracking-[0.14em] text-indigo-100/85">
+    <span className="pointer-events-none font-hud text-[7px] font-bold leading-none tracking-[0.1em] text-indigo-100/90">
       {t}
     </span>
   );
@@ -277,8 +298,8 @@ export default function Controls({ game }: { game: Engine }) {
 
       {/* ================= LANDSCAPE CLUSTER ================= */}
       <div
-        className="absolute right-2 bottom-[max(0.9rem,env(safe-area-inset-bottom))] z-20 origin-bottom-right portrait:hidden max-[620px]:scale-[0.8] max-[420px]:scale-[0.66]"
-        style={{ touchAction: "none" }}
+        className="absolute right-2 bottom-[max(0.9rem,env(safe-area-inset-bottom))] z-20 origin-bottom-right portrait:hidden"
+        style={{ touchAction: "none", transform: `scale(${scale})` }}
         onContextMenu={(e) => e.preventDefault()}
       >
         <div className="relative h-[236px] w-[268px]">
@@ -286,7 +307,7 @@ export default function Controls({ game }: { game: Engine }) {
           <button
             {...bind("up")}
             aria-label="Ascend"
-            className={`abtn absolute left-0 top-[64px] h-[54px] w-[54px] ${pressed.up ? "pressed" : ""}`}
+            className={`abtn absolute left-0 top-[10px] h-[50px] w-[50px] ${pressed.up ? "pressed" : ""}`}
           >
             <ChevronUp size={26} strokeWidth={3} />
             {label("UP")}
@@ -294,7 +315,7 @@ export default function Controls({ game }: { game: Engine }) {
           <button
             {...bind("down")}
             aria-label="Descend"
-            className={`abtn absolute left-0 top-[132px] h-[54px] w-[54px] ${pressed.down ? "pressed" : ""}`}
+            className={`abtn absolute left-0 top-[70px] h-[50px] w-[50px] ${pressed.down ? "pressed" : ""}`}
           >
             <ChevronDown size={26} strokeWidth={3} />
             {label("DOWN")}
@@ -305,7 +326,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={odBtnRef}
             {...bind("over")}
             aria-label="Overdrive"
-            className="abtn absolute left-[74px] top-0 h-[52px] w-[52px] transition-opacity"
+            className={`abtn absolute left-[128px] top-[6px] h-[50px] w-[50px] transition-opacity ${pressed.over ? "pressed" : ""}`}
             style={{ opacity: 0.4 }}
           >
             <div
@@ -327,7 +348,7 @@ export default function Controls({ game }: { game: Engine }) {
           <button
             {...bind("grab")}
             aria-label="Grab or thunder clap"
-            className={`abtn absolute left-[140px] top-0 h-[52px] w-[52px] ${pressed.grab ? "pressed" : ""}`}
+            className={`abtn absolute left-[64px] top-[70px] h-[52px] w-[52px] ${pressed.grab ? "pressed" : ""}`}
           >
             <Grab size={22} />
             {label("GRAB")}
@@ -339,7 +360,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={(r) => { visionBtnRef.current = r; }}
             {...bind("vision")}
             aria-label="Atomic vision"
-            className={`abtn absolute left-[206px] top-0 h-[52px] w-[52px] ${pressed.vision ? "pressed" : ""}`}
+            className={`abtn absolute left-[128px] top-[66px] h-[50px] w-[50px] ${pressed.vision ? "pressed" : ""}`}
           >
             <Eye size={22} className="text-orange-300" />
             {label("VISION")}
@@ -351,7 +372,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={(r) => { btnRefs.current.bolt = r; }}
             {...bind("bolt")}
             aria-label="Thunder strike"
-            className={`abtn absolute right-[84px] top-[2px] h-[54px] w-[54px] ${pressed.bolt ? "pressed" : ""}`}
+            className={`abtn absolute left-[64px] top-[6px] h-[52px] w-[52px] ${pressed.bolt ? "pressed" : ""}`}
           >
             <CloudLightning size={24} className="text-sky-200" />
             <div ref={(r) => { ovRefs.current.bolt = r; }} className="cd-sweep font-hud text-lg" />
@@ -364,7 +385,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={blockBtnRef}
             {...bind("block")}
             aria-label="Brace"
-            className={`abtn absolute right-[8px] top-[76px] h-[58px] w-[58px] transition-all ${pressed.block ? "pressed" : ""}`}
+            className={`abtn absolute left-[64px] top-[132px] h-[54px] w-[54px] transition-all ${pressed.brace ? "pressed" : ""}`}
           >
             <Shield size={24} className="text-sky-300" />
             {label("BRACE")}
@@ -375,7 +396,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={(r) => { btnRefs.current.cyclone = r; }}
             {...bind("cyclone")}
             aria-label="Cyclone spin"
-            className={`abtn absolute left-[78px] top-[64px] h-[60px] w-[60px] ${pressed.cyclone ? "pressed" : ""}`}
+            className={`abtn absolute left-[122px] top-[126px] h-[54px] w-[54px] ${pressed.cyclone ? "pressed" : ""}`}
           >
             <Tornado size={25} className="text-amber-300" />
             <div ref={(r) => { ovRefs.current.cyclone = r; }} className="cd-sweep font-hud text-lg" />
@@ -387,7 +408,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={(r) => { btnRefs.current.slam = r; }}
             {...bind("slam")}
             aria-label="Nova slam, pile-driver or ground stomp"
-            className={`abtn absolute right-[14px] top-[146px] h-[60px] w-[60px] ${pressed.slam ? "pressed" : ""}`}
+            className={`abtn absolute right-[12px] top-[76px] h-[58px] w-[58px] ${pressed.slam ? "pressed" : ""}`}
           >
             <Orbit size={24} />
             <div ref={(r) => { ovRefs.current.slam = r; }} className="cd-sweep font-hud text-lg" />
@@ -399,7 +420,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={(r) => { btnRefs.current.blast = r; }}
             {...bind("blast")}
             aria-label="Plasma blast"
-            className={`abtn absolute right-[92px] bottom-[26px] h-[62px] w-[62px] ${pressed.blast ? "pressed" : ""}`}
+            className={`abtn absolute right-[8px] top-[8px] h-[62px] w-[62px] ${pressed.blast ? "pressed" : ""}`}
           >
             <Zap size={24} className="drop-shadow-[0_0_6px_rgba(255,210,63,0.7)]" />
             <div ref={(r) => { ovRefs.current.blast = r; }} className="cd-sweep font-hud text-lg" />
@@ -411,7 +432,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={(r) => { btnRefs.current.dash = r; }}
             {...bind("dash")}
             aria-label="Sonic dash"
-            className={`abtn absolute left-[84px] bottom-[16px] h-[62px] w-[62px] ${pressed.dash ? "pressed" : ""}`}
+            className={`abtn absolute left-[4px] top-[132px] h-[56px] w-[56px] ${pressed.dash ? "pressed" : ""}`}
           >
             <Wind size={25} />
             <div ref={(r) => { ovRefs.current.dash = r; }} className="cd-sweep font-hud text-lg" />
@@ -442,8 +463,8 @@ export default function Controls({ game }: { game: Engine }) {
 
       {/* ================= PORTRAIT CLUSTER ================= */}
       <div
-        className="absolute right-2 bottom-[max(0.9rem,env(safe-area-inset-bottom))] z-20 hidden origin-bottom-right portrait:block max-[420px]:scale-[0.82]"
-        style={{ touchAction: "none" }}
+        className="absolute right-2 bottom-[max(0.9rem,env(safe-area-inset-bottom))] z-20 hidden origin-bottom-right portrait:block"
+        style={{ touchAction: "none", transform: `scale(${scale})` }}
         onContextMenu={(e) => e.preventDefault()}
       >
         <div className="relative h-[430px] w-[218px]">
@@ -451,7 +472,7 @@ export default function Controls({ game }: { game: Engine }) {
           <button
             {...bind("up")}
             aria-label="Ascend"
-            className={`abtn absolute right-[6px] top-0 h-[52px] w-[52px] ${pressed.up ? "pressed" : ""}`}
+            className={`abtn absolute right-[8px] top-[4px] h-[50px] w-[50px] ${pressed.up ? "pressed" : ""}`}
           >
             <ChevronUp size={24} strokeWidth={3} />
             {label("UP")}
@@ -459,7 +480,7 @@ export default function Controls({ game }: { game: Engine }) {
           <button
             {...bind("down")}
             aria-label="Descend"
-            className={`abtn absolute right-[6px] top-[62px] h-[52px] w-[52px] ${pressed.down ? "pressed" : ""}`}
+            className={`abtn absolute right-[8px] top-[64px] h-[50px] w-[50px] ${pressed.down ? "pressed" : ""}`}
           >
             <ChevronDown size={24} strokeWidth={3} />
             {label("DOWN")}
@@ -468,7 +489,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={(r) => { btnRefs.current.dash = r; }}
             {...bind("dash")}
             aria-label="Sonic dash"
-            className={`abtn absolute right-[4px] top-[132px] h-[58px] w-[58px] ${pressed.dash ? "pressed" : ""}`}
+            className={`abtn absolute right-[6px] top-[124px] h-[56px] w-[56px] ${pressed.dash ? "pressed" : ""}`}
           >
             <Wind size={24} />
             <div ref={(r) => { ovRefs.current.dash = r; }} className="cd-sweep font-hud text-lg" />
@@ -478,7 +499,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={(r) => { btnRefs.current.blast = r; }}
             {...bind("blast")}
             aria-label="Plasma blast"
-            className={`abtn absolute right-[4px] top-[202px] h-[62px] w-[62px] ${pressed.blast ? "pressed" : ""}`}
+            className={`abtn absolute right-[4px] top-[190px] h-[60px] w-[60px] ${pressed.blast ? "pressed" : ""}`}
           >
             <Zap size={24} className="drop-shadow-[0_0_6px_rgba(255,210,63,0.7)]" />
             <div ref={(r) => { ovRefs.current.blast = r; }} className="cd-sweep font-hud text-lg" />
@@ -488,7 +509,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={(r) => { btnRefs.current.strike = r; strikeBtnRef.current = r; }}
             {...bind("strike")}
             aria-label="Power strike"
-            className={`abtn absolute right-[2px] bottom-[2px] h-[92px] w-[92px] ${pressed.strike ? "pressed" : ""}`}
+            className={`abtn absolute right-[2px] bottom-[2px] h-[88px] w-[88px] ${pressed.strike ? "pressed" : ""}`}
             style={{
               background:
                 "radial-gradient(circle at 32% 26%, rgba(255,255,255,0.35), transparent 42%), linear-gradient(160deg, #ffd23f, #f7931e 65%, #d9432b)",
@@ -507,7 +528,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={(r) => { btnRefs.current.slam = r; }}
             {...bind("slam")}
             aria-label="Nova slam, pile-driver or ground stomp"
-            className={`abtn absolute left-[104px] bottom-[8px] h-[60px] w-[60px] ${pressed.slam ? "pressed" : ""}`}
+            className={`abtn absolute left-[8px] top-[354px] h-[54px] w-[54px] ${pressed.slam ? "pressed" : ""}`}
           >
             <Orbit size={23} />
             <div ref={(r) => { ovRefs.current.slam = r; }} className="cd-sweep font-hud text-lg" />
@@ -517,7 +538,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={(r) => { btnRefs.current.cyclone = r; }}
             {...bind("cyclone")}
             aria-label="Cyclone spin"
-            className={`abtn absolute left-[104px] bottom-[80px] h-[58px] w-[58px] ${pressed.cyclone ? "pressed" : ""}`}
+            className={`abtn absolute left-[8px] top-[294px] h-[52px] w-[52px] ${pressed.cyclone ? "pressed" : ""}`}
           >
             <Tornado size={23} className="text-amber-300" />
             <div ref={(r) => { ovRefs.current.cyclone = r; }} className="cd-sweep font-hud text-lg" />
@@ -526,7 +547,7 @@ export default function Controls({ game }: { game: Engine }) {
           <button
             {...bind("grab")}
             aria-label="Grab or thunder clap"
-            className={`abtn absolute left-[104px] bottom-[150px] h-[54px] w-[54px] ${pressed.grab ? "pressed" : ""}`}
+            className={`abtn absolute left-[8px] top-[236px] h-[48px] w-[48px] ${pressed.grab ? "pressed" : ""}`}
           >
             <Grab size={21} />
             {label("GRAB")}
@@ -535,7 +556,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={(r) => { btnRefs.current.bolt = r; }}
             {...bind("bolt")}
             aria-label="Thunder strike"
-            className={`abtn absolute left-[104px] bottom-[216px] h-[54px] w-[54px] ${pressed.bolt ? "pressed" : ""}`}
+            className={`abtn absolute left-[8px] top-[178px] h-[48px] w-[48px] ${pressed.bolt ? "pressed" : ""}`}
           >
             <CloudLightning size={22} className="text-sky-200" />
             <div ref={(r) => { ovRefs.current.bolt = r; }} className="cd-sweep font-hud text-lg" />
@@ -545,7 +566,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={(r) => { visionBtnRef.current = r; }}
             {...bind("vision")}
             aria-label="Atomic vision"
-            className={`abtn absolute left-[104px] bottom-[282px] h-[54px] w-[54px] ${pressed.vision ? "pressed" : ""}`}
+            className={`abtn absolute left-[8px] top-[120px] h-[48px] w-[48px] ${pressed.vision ? "pressed" : ""}`}
           >
             <Eye size={22} className="text-orange-300" />
             {label("VISION")}
@@ -554,7 +575,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={odBtnRef}
             {...bind("over")}
             aria-label="Overdrive"
-            className="abtn absolute left-[104px] top-[6px] h-[50px] w-[50px] transition-opacity"
+            className={`abtn absolute left-[8px] top-[4px] h-[48px] w-[48px] transition-opacity ${pressed.over ? "pressed" : ""}`}
             style={{ opacity: 0.4 }}
           >
             <div
@@ -574,7 +595,7 @@ export default function Controls({ game }: { game: Engine }) {
             ref={blockBtnRef}
             {...bind("block")}
             aria-label="Brace"
-            className={`abtn absolute left-[104px] top-[68px] h-[54px] w-[54px] transition-all ${pressed.block ? "pressed" : ""}`}
+            className={`abtn absolute left-[8px] top-[62px] h-[48px] w-[48px] transition-all ${pressed.brace ? "pressed" : ""}`}
           >
             <Shield size={22} className="text-sky-300" />
             {label("BRACE")}
