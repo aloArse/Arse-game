@@ -54,7 +54,7 @@ function AbilityBtn({ a, register, onHold }: {
   return (
     <button
       aria-label={a.name}
-      className="abtn absolute h-[48px] w-[48px]"
+      className="abtn h-[48px] w-[48px]"
       onPointerDown={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -84,8 +84,9 @@ export default function Controls({ game, loadout }: { game: Engine; loadout: str
   const [everUsed, setEverUsed] = useState(false);
   const maxedRef = useRef(false);
 
-  /* ---------- right flight stick state ---------- */
+  /* ---------- right flight-pad state (whole right half of the screen) ---------- */
   const [joy2, setJoy2] = useState<{ id: number; ax: number; ay: number; bx: number; by: number; dx: number; dy: number } | null>(null);
+  const [everUsed2, setEverUsed2] = useState(false);
   const maxed2Ref = useRef(false);
 
   /* ---------- fixed buttons (overdrive / brace) ---------- */
@@ -157,19 +158,14 @@ export default function Controls({ game, loadout }: { game: Engine; loadout: str
     else releaseAbility(a);
   };
 
-  /* ---------- auto-scale ---------- */
-  const [scale, setScale] = useState({ p: 1, l: 1 });
+  /* ---------- auto-scale (one ability cluster: 3×2 grid + brace/OD row) ---------- */
+  const [scale, setScale] = useState({ c: 1 });
   useEffect(() => {
     const calc = () => {
       const w = window.innerWidth, h = window.innerHeight;
-      const portrait = h >= w;
-      // portrait: left column 56×412 design · right cluster 150×310 design
-      // landscape: left cluster 122×242 design · right cluster 140×250 design
-      const pd = { w: 56, h: 412 }, ld = { w: 122, h: 242 };
-      const rd = portrait ? { w: 150, h: 310 } : { w: 140, h: 250 };
-      const sp = Math.max(0.5, Math.min(1, (w * 0.3) / pd.w, (h * 0.86) / pd.h));
-      const sl = Math.max(0.5, Math.min(1, (w * 0.36) / ld.w, (h * 0.9) / ld.h, (w * 0.4) / rd.w));
-      setScale({ p: sp, l: sl });
+      // cluster design: 176w × ~176h
+      const c = Math.max(0.55, Math.min(1, (w * 0.62) / 176, (h * 0.44) / 176));
+      setScale({ c });
     };
     calc();
     window.addEventListener("resize", calc);
@@ -227,6 +223,7 @@ export default function Controls({ game, loadout }: { game: Engine; loadout: str
   const onZone2Down = (e: React.PointerEvent<HTMLDivElement>) => {
     if (joy2) return;
     try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
+    setEverUsed2(true);
     maxed2Ref.current = false;
     pad2.active = true; pad2.x = 0; pad2.y = 0; pad2.mag = 0;
     setJoy2({ id: e.pointerId, ax: e.clientX, ay: e.clientY, bx: e.clientX, by: e.clientY, dx: 0, dy: 0 });
@@ -280,7 +277,7 @@ export default function Controls({ game, loadout }: { game: Engine; loadout: str
 
   return (
     <>
-      {/* ---------- move stick zone (left) ---------- */}
+      {/* ---------- move stick zone (left half) ---------- */}
       <div
         className="absolute left-0 top-0 z-10 h-full w-[44%] portrait:w-[52%]"
         style={{ touchAction: "none" }}
@@ -299,9 +296,12 @@ export default function Controls({ game, loadout }: { game: Engine; loadout: str
         {stick(joy, 60, 27)}
       </div>
 
-      {/* ---------- flight stick zone (right-bottom) ---------- */}
+      {/* ---------- FLIGHT PAD: the entire right half of the screen ----------
+          No button, no stick graphic — touch anywhere and drag:
+          up = climb · down = dive · left/right = strafe.
+          Only a subtle origin ring + direction chevron follows the finger. */}
       <div
-        className="absolute bottom-0 right-0 z-10 h-[46%] w-[46%] landscape:h-[70%] landscape:w-[52%]"
+        className="absolute right-0 top-0 z-10 h-full w-[56%] portrait:w-[48%]"
         style={{ touchAction: "none" }}
         onPointerDown={onZone2Down}
         onPointerMove={onZone2Move}
@@ -309,40 +309,47 @@ export default function Controls({ game, loadout }: { game: Engine; loadout: str
         onPointerCancel={onZone2Up}
         onContextMenu={(e) => e.preventDefault()}
       >
-        {!joy2 && (
-          <div className="pointer-events-none absolute bottom-[14%] right-[16%] text-center">
-            <div className="joy-base opacity-60" style={{ position: "relative", left: "50%", marginLeft: -55, top: -55, width: 110, height: 110 }} />
-            <div className="mt-2 font-hud text-[10px] tracking-widest text-white/40">پرواز ↑↓</div>
+        {!everUsed2 && !joy2 && (
+          <div className="flight-hint pointer-events-none absolute right-[8%] top-[32%] text-right font-hud text-[10px] leading-5 tracking-widest text-white/50">
+            نیمهٔ راست صفحه
+            <br />
+            بالا · پایین · چپ · راست
           </div>
         )}
-        {stick(joy2, 55, 25)}
+        {joy2 && (
+          <>
+            <div className="pad2-origin" style={{ left: joy2.ax - 17, top: joy2.ay - 17 }} />
+            {Math.hypot(joy2.dx, joy2.dy) > 6 && (() => {
+              const m = Math.hypot(joy2.dx, joy2.dy);
+              const ang = (Math.atan2(joy2.dy, joy2.dx) * 180) / Math.PI;
+              return (
+                <div
+                  className="pad2-arrow"
+                  style={{
+                    left: joy2.ax + (joy2.dx / m) * 46,
+                    top: joy2.ay + (joy2.dy / m) * 46 - 7,
+                    transform: `rotate(${ang}deg)`,
+                  }}
+                />
+              );
+            })()}
+          </>
+        )}
       </div>
 
-      {/* ================= PORTRAIT ability column (left) ================= */}
+      {/* ---------- ability cluster (bottom-right, thumb reach) ----------
+          3×2 loadout grid with BRACE / OVERDRIVE above. The cluster sits on
+          top of the flight pad: taps hit the buttons, everything around
+          them is flight control. */}
       <div
-        className="absolute left-2 bottom-[max(0.9rem,env(safe-area-inset-bottom))] z-20 origin-bottom-left landscape:hidden"
-        style={{ touchAction: "none", transform: `scale(${scale.p})` }}
+        className="absolute bottom-[max(0.9rem,env(safe-area-inset-bottom))] right-2 z-20 origin-bottom-right"
+        style={{ touchAction: "none", transform: `scale(${scale.c})` }}
         onContextMenu={(e) => e.preventDefault()}
       >
-        <div className="relative h-[412px] w-[56px]">
-          {abilities.map((a, i) => (
-            <div key={a.id} className="absolute left-0" style={{ top: 4 + i * 67 }}>
-              <AbilityBtn a={a} register={register} onHold={holdWrap} />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* ================= PORTRAIT right cluster (overdrive + brace) ================= */}
-      <div
-        className="absolute right-2 top-[max(3.9rem,calc(env(safe-area-inset-top)+3.2rem))] z-20 origin-top-right landscape:hidden"
-        style={{ touchAction: "none", transform: `scale(${scale.p})` }}
-        onContextMenu={(e) => e.preventDefault()}
-      >
-        <div className="relative h-[120px] w-[56px]">
+        <div className="mb-2 flex items-end justify-end gap-2.5">
           <button
             aria-label="Brace"
-            className={`abtn absolute left-0 top-0 h-[46px] w-[46px] ${braceOn ? "pressed" : ""}`}
+            className={`abtn h-[46px] w-[46px] ${braceOn ? "pressed" : ""}`}
             onPointerDown={(e) => {
               e.preventDefault(); e.stopPropagation();
               try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
@@ -357,7 +364,7 @@ export default function Controls({ game, loadout }: { game: Engine; loadout: str
           </button>
           <button
             aria-label="Overdrive"
-            className={`abtn absolute left-0 top-[56px] h-[50px] w-[50px] ${odOn ? "pressed" : ""}`}
+            className={`abtn h-[50px] w-[50px] ${odOn ? "pressed" : ""}`}
             onPointerDown={(e) => {
               e.preventDefault(); e.stopPropagation();
               try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
@@ -371,50 +378,10 @@ export default function Controls({ game, loadout }: { game: Engine; loadout: str
             <span className="pointer-events-none font-hud text-[7px] font-bold leading-none text-amber-100/90">اوج</span>
           </button>
         </div>
-      </div>
-
-      {/* ================= LANDSCAPE cluster (left) ================= */}
-      <div
-        className="absolute left-2 bottom-[max(0.9rem,env(safe-area-inset-bottom))] z-20 origin-bottom-left portrait:hidden"
-        style={{ touchAction: "none", transform: `scale(${scale.l})` }}
-        onContextMenu={(e) => e.preventDefault()}
-      >
-        <div className="relative h-[242px] w-[122px]">
-          {abilities.slice(0, 6).map((a, i) => (
-            <div key={a.id} className="absolute" style={{ left: 4 + (i % 2) * 62, top: 6 + Math.floor(i / 2) * 60 }}>
-              <AbilityBtn a={a} register={register} onHold={holdWrap} />
-            </div>
+        <div className="grid grid-cols-3 gap-[10px]">
+          {abilities.slice(0, 6).map((a) => (
+            <AbilityBtn key={a.id} a={a} register={register} onHold={holdWrap} />
           ))}
-          <button
-            aria-label="Brace"
-            className={`abtn absolute left-[4px] top-[186px] h-[46px] w-[46px] ${braceOn ? "pressed" : ""}`}
-            onPointerDown={(e) => {
-              e.preventDefault(); e.stopPropagation();
-              try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
-              touch.block = true; setBraceOn(true);
-            }}
-            onPointerUp={() => { touch.block = false; setBraceOn(false); }}
-            onPointerCancel={() => { touch.block = false; setBraceOn(false); }}
-            onContextMenu={(e) => e.preventDefault()}
-          >
-            <Shield size={20} strokeWidth={2.6} />
-            <span className="pointer-events-none font-hud text-[7px] font-bold leading-none text-indigo-100/90">محافظ</span>
-          </button>
-          <button
-            aria-label="Overdrive"
-            className={`abtn absolute left-[62px] top-[182px] h-[50px] w-[50px] ${odOn ? "pressed" : ""}`}
-            onPointerDown={(e) => {
-              e.preventDefault(); e.stopPropagation();
-              try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
-              tap("over"); setOdOn(true);
-            }}
-            onPointerUp={() => setOdOn(false)}
-            onPointerCancel={() => setOdOn(false)}
-            onContextMenu={(e) => e.preventDefault()}
-          >
-            <BatteryCharging size={22} strokeWidth={2.6} />
-            <span className="pointer-events-none font-hud text-[7px] font-bold leading-none text-amber-100/90">اوج</span>
-          </button>
         </div>
       </div>
     </>

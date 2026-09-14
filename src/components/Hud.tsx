@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Heart, Zap, Flame, Pause, Volume2, VolumeX, Skull, Trophy, Building2, Gauge, Swords, Shirt, Settings2, Rocket } from "lucide-react";
 import type { Engine } from "../game3d/engine";
 import { tap } from "../game/input";
@@ -39,6 +39,14 @@ export default function Hud({ game, muted, onToggleMute, onOpenPanel }: {
   const fpsEl = useRef<HTMLSpanElement>(null);
   const ageBar = useRef<HTMLDivElement>(null);
   const st = useRef({ ghost: 1, combo: 0, msg: "" });
+  const [msize, setMsize] = useState(112);
+  useEffect(() => {
+    const calc = () => setMsize(Math.max(84, Math.min(112, Math.round(window.innerWidth * 0.27))));
+    calc();
+    window.addEventListener("resize", calc);
+    window.addEventListener("orientationchange", calc);
+    return () => { window.removeEventListener("resize", calc); window.removeEventListener("orientationchange", calc); };
+  }, []);
 
   useEffect(() => {
     let raf = 0;
@@ -155,43 +163,52 @@ export default function Hud({ game, muted, onToggleMute, onOpenPanel }: {
         <div className="absolute left-1/2 top-1/2 h-[3px] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-200" />
       </div>
 
-      {/* ---------- vitals ---------- */}
-      <div className="absolute left-0 top-0 w-[min(300px,58vw)] p-3" style={{ paddingTop: "max(0.8rem, env(safe-area-inset-top))" }}>
-        <div className="mb-1.5 flex items-center gap-2">
-          <Heart size={15} className="shrink-0 text-[#ff5f6e] drop-shadow-[0_0_6px_rgba(255,43,58,0.8)]" fill="currentColor" />
-          <div className="bar-shell bar-gloss h-[15px] flex-1">
-            <div ref={hpGhost} className="bar-fill bg-[rgba(255,235,200,0.5)]" />
-            <div ref={hpFill} className="bar-fill" />
-            <div className="bar-ticks" />
+      {/* ---------- left rail: MINIMAP at the top-left corner + vitals + age ---------- */}
+      <div className="absolute left-0 top-0 p-3" style={{ paddingTop: "max(0.8rem, env(safe-area-inset-top))" }}>
+        <div className="flex items-start gap-2.5 portrait:block">
+          <Minimap game={game} size={msize} />
+          <div className="w-[min(250px,36vw)] portrait:mt-2 portrait:w-[150px]">
+            <div className="mb-1.5 flex items-center gap-2">
+              <Heart size={15} className="shrink-0 text-[#ff5f6e] drop-shadow-[0_0_6px_rgba(255,43,58,0.8)]" fill="currentColor" />
+              <div className="bar-shell bar-gloss h-[15px] flex-1">
+                <div ref={hpGhost} className="bar-fill bg-[rgba(255,235,200,0.5)]" />
+                <div ref={hpFill} className="bar-fill" />
+                <div className="bar-ticks" />
+              </div>
+              <span ref={hpTxt} className="font-hud w-7 text-right text-sm font-bold text-rose-100 text-shadow">100</span>
+            </div>
+            <div className="mb-1.5 flex items-center gap-2 pl-[23px]">
+              <div className="bar-shell bar-gloss h-[10px] w-[86%]">
+                <div ref={enFill} className="bar-fill" style={{ background: "linear-gradient(90deg,#41b8ff,#6ecbff)" }} />
+              </div>
+              <Zap size={12} className="shrink-0 text-sky-300" fill="currentColor" />
+            </div>
+            <div className="flex items-center gap-2 pl-[23px]">
+              <div ref={odWrap} className="bar-shell h-[7px] w-[86%] transition-shadow">
+                <div ref={odFill} className="bar-fill" style={{ background: "linear-gradient(90deg,#ffd23f,#ff7a3c)" }} />
+              </div>
+              <Flame size={12} className="shrink-0 text-amber-300" fill="currentColor" />
+            </div>
           </div>
-          <span ref={hpTxt} className="font-hud w-7 text-right text-sm font-bold text-rose-100 text-shadow">100</span>
-        </div>
-        <div className="mb-1.5 flex items-center gap-2 pl-[23px]">
-          <div className="bar-shell bar-gloss h-[10px] w-[86%]">
-            <div ref={enFill} className="bar-fill" style={{ background: "linear-gradient(90deg,#41b8ff,#6ecbff)" }} />
+          <div ref={ageWrap} className="chip self-start rounded-lg px-2.5 py-1 transition-all duration-300" style={{ width: "fit-content" }}>
+            <span ref={ageEl} className="font-hud whitespace-nowrap text-[11px] font-bold tracking-[0.12em] text-emerald-200">سن 18 · قدرت 100٪</span>
+            <div className="bar-shell mt-0.5 h-[3px] w-full">
+              <div ref={ageBar} className="bar-fill origin-right" style={{ background: "linear-gradient(90deg,#41e8a0,#9fe8ff)" }} />
+            </div>
           </div>
-          <Zap size={12} className="shrink-0 text-sky-300" fill="currentColor" />
         </div>
-        <div className="flex items-center gap-2 pl-[23px]">
-          <div ref={odWrap} className="bar-shell h-[7px] w-[86%] transition-shadow">
-            <div ref={odFill} className="bar-fill" style={{ background: "linear-gradient(90deg,#ffd23f,#ff7a3c)" }} />
-          </div>
-          <Flame size={12} className="shrink-0 text-amber-300" fill="currentColor" />
-        </div>
+      </div>
 
-        <div ref={comboWrap} className="mt-3 origin-left opacity-0 transition-opacity duration-200">
-          <div ref={comboNum} className="font-display text-4xl text-[#ffd23f] drop-shadow-[0_3px_0_rgba(122,16,32,0.9)]">×2</div>
-          <div className="font-hud text-[11px] font-bold tracking-[0.42em] text-amber-100/80">COMBO</div>
-        </div>
-        <div className="mt-2">
-          <Minimap game={game} size={112} />
-        </div>
+      {/* combo counter — floats over the left rail area while fighting */}
+      <div ref={comboWrap} className="absolute left-3 top-[34%] origin-left opacity-0 transition-opacity duration-200">
+        <div ref={comboNum} className="font-display text-4xl text-[#ffd23f] drop-shadow-[0_3px_0_rgba(122,16,32,0.9)]">×2</div>
+        <div className="font-hud text-[11px] font-bold tracking-[0.42em] text-amber-100/80">COMBO</div>
       </div>
 
       {/* zone warning */}
       <div
         ref={zoneEl}
-        className="absolute left-1/2 top-[max(7.6rem,calc(env(safe-area-inset-top)+7.2rem))] -translate-x-1/2 scale-95 opacity-0 transition-all duration-300"
+        className="absolute left-1/2 top-[max(10.4rem,calc(env(safe-area-inset-top)+10rem))] -translate-x-1/2 scale-95 opacity-0 transition-all duration-300 portrait:top-[max(17.2rem,calc(env(safe-area-inset-top)+16.8rem))]"
       >
         <div className="chip rounded-lg border border-rose-400/40 px-3 py-1.5" style={{ animation: "zonePulse 1.2s ease-in-out infinite" }}>
           <span className="font-hud text-[10px] font-bold tracking-[0.1em] text-rose-200">⚠ خارج از منطقهٔ نبرد — دشمنی دنبالت نمی‌آید</span>
@@ -207,39 +224,39 @@ export default function Hud({ game, muted, onToggleMute, onOpenPanel }: {
       </div>
 
       {/* ---------- score / system ---------- */}
-      <div className="absolute right-0 top-0 flex flex-col items-end gap-1.5 p-3" style={{ paddingTop: "max(0.8rem, env(safe-area-inset-top))" }}>
+      <div className="absolute right-0 top-0 flex origin-top-right flex-col items-end gap-1.5 p-3 max-[350px]:scale-75" style={{ paddingTop: "max(0.8rem, env(safe-area-inset-top))" }}>
         <div className="flex items-center gap-1.5">
           <button
             onPointerDown={(e) => { e.stopPropagation(); onOpenPanel("abilities"); }}
-            className="chip pointer-events-auto grid h-9 w-9 place-items-center rounded-lg text-sky-200 active:scale-90"
+            className="chip pointer-events-auto grid h-8 w-8 place-items-center rounded-lg text-sky-200 active:scale-90"
             aria-label="Abilities panel"
           >
             <Swords size={15} />
           </button>
           <button
             onPointerDown={(e) => { e.stopPropagation(); onOpenPanel("skins"); }}
-            className="chip pointer-events-auto grid h-9 w-9 place-items-center rounded-lg text-pink-200 active:scale-90"
+            className="chip pointer-events-auto grid h-8 w-8 place-items-center rounded-lg text-pink-200 active:scale-90"
             aria-label="Skins panel"
           >
             <Shirt size={15} />
           </button>
           <button
             onPointerDown={(e) => { e.stopPropagation(); onOpenPanel("settings"); }}
-            className="chip pointer-events-auto grid h-9 w-9 place-items-center rounded-lg text-emerald-200 active:scale-90"
+            className="chip pointer-events-auto grid h-8 w-8 place-items-center rounded-lg text-emerald-200 active:scale-90"
             aria-label="Settings panel"
           >
             <Settings2 size={15} />
           </button>
           <button
             onPointerDown={(e) => { e.stopPropagation(); tap("pause"); }}
-            className="chip pointer-events-auto grid h-9 w-9 place-items-center rounded-lg text-indigo-100 active:scale-90"
+            className="chip pointer-events-auto grid h-8 w-8 place-items-center rounded-lg text-indigo-100 active:scale-90"
             aria-label="Pause"
           >
             <Pause size={16} />
           </button>
           <button
             onPointerDown={(e) => { e.stopPropagation(); onToggleMute(); }}
-            className="chip pointer-events-auto grid h-9 w-9 place-items-center rounded-lg text-indigo-100 active:scale-90"
+            className="chip pointer-events-auto grid h-8 w-8 place-items-center rounded-lg text-indigo-100 active:scale-90"
             aria-label="Mute"
           >
             {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
@@ -261,12 +278,6 @@ export default function Hud({ game, muted, onToggleMute, onOpenPanel }: {
           <div className="chip flex items-center gap-1 rounded-lg px-2.5 py-1">
             <Building2 size={11} className="text-amber-300" />
             <span ref={demoTxt} className="font-hud text-sm font-bold text-white">0</span>
-          </div>
-        </div>
-        <div ref={ageWrap} className="chip rounded-lg px-2.5 py-1 transition-all duration-300">
-          <span ref={ageEl} className="font-hud text-[11px] font-bold tracking-[0.12em] text-emerald-200">سن 18 · قدرت 100٪</span>
-          <div className="bar-shell mt-0.5 h-[3px] w-full">
-            <div ref={ageBar} className="bar-fill origin-right" style={{ background: "linear-gradient(90deg,#41e8a0,#9fe8ff)" }} />
           </div>
         </div>
         <div className="chip rounded-lg px-2.5 py-1 opacity-0 transition-opacity">
@@ -301,7 +312,7 @@ export default function Hud({ game, muted, onToggleMute, onOpenPanel }: {
       {/* ---------- boss bar ---------- */}
       <div
         ref={bossWrap}
-        className="absolute left-1/2 top-[max(3.4rem,env(safe-area-inset-top))] w-[min(440px,74vw)] -translate-x-1/2 opacity-0 transition-opacity duration-500"
+        className="absolute left-1/2 top-[max(8rem,calc(env(safe-area-inset-top)+7.6rem))] w-[min(440px,74vw)] -translate-x-1/2 opacity-0 transition-opacity duration-500 portrait:top-[max(14rem,calc(env(safe-area-inset-top)+13.5rem))]"
       >
         <div ref={bossNameEl} className="mb-1 text-center font-display text-sm tracking-[0.3em] text-[#ff8896] drop-shadow-[0_2px_6px_rgba(0,0,0,0.85)]">
           WARLORD

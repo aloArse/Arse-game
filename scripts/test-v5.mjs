@@ -78,7 +78,7 @@ for (const label of ["Plasma blast", "Power strike"]) {
 // ============ 2) right flight stick: climb + descend ============
 const dragStick = async (dir) => {
   await page.evaluate((dir) => {
-    const x = 322, y = 710;
+    const x = 296, y = 300; // clear right-half space: below top bar, above ability cluster
     const zone = document.elementFromPoint(x, y);
     const fire = (t, cy, btns) => zone.dispatchEvent(new PointerEvent(t, {
       pointerId: 21, pointerType: "touch", isPrimary: true, bubbles: true, cancelable: true,

@@ -162,8 +162,8 @@ export function HowTo({ onClose }: { onClose: () => void }) {
         <div className="grid gap-2.5">
           <Row icon={<Move size={20} />} keyCap="L-STICK / WASD" title="FLIGHT"
             desc="True 3D momentum flight, relative to the camera. The stick base drifts with your thumb so you never run out of throw — hold the gate to spool up the afterburner." />
-          <Row icon={<ChevronsUpDown size={20} />} keyCap="SPACE / C" title="ALTITUDE"
-            desc="Climb above the cloud deck or dive between towers. The two thruster buttons on the right pad control vertical lift." />
+          <Row icon={<ChevronsUpDown size={20} />} keyCap="RIGHT HALF" title="ALTITUDE"
+            desc="Climb above the cloud deck or dive between towers. Touch anywhere on the RIGHT HALF of the screen and drag: up = climb, down = dive, left/right = strafe." />
           <Row icon={<Hand size={20} />} keyCap="J (TAP / HOLD)" title="STRIKE CHAIN → FLURRY"
             desc="Jab → cross → launching UPPERCUT, each with real wind-up and follow-through. Keep J HELD near a target and it becomes a FLURRY — a magnetized rapid-fire barrage that drags you onto the victim." />
           <Row icon={<Wind size={20} />} keyCap="SHIFT + J" title="DASH-CANCEL PUNCH"
@@ -190,8 +190,8 @@ export function HowTo({ onClose }: { onClose: () => void }) {
             desc="Mark grows stronger with age — AUTOMATICALLY. Every 30 seconds he ages one year: permanent +damage, +speed, +health and faster cooldowns, and your age is SAVED between runs. No wave required — fight on, grow on." />
           <Row icon={<Skull size={20} />} keyCap="WARLORDS" title="THREE BOSS FIGHTS"
             desc="Every 5th wave a named warlord hunts you — proactively, wherever you are: KURGAN THE SLEDGE chains rush-punches and ground slams; THRAXA THE BLADE orbit-strafes and blink-slashes in violet streaks; LORD CONQUEST bombards, summons drones and calls judgement strikes on your position (watch the ground rings). Each enrages below 40% health." />
-          <Row icon={<Move size={20} />} keyCap="R-STICK" title="FLIGHT STICK & GROUND MODE"
-            desc="The RIGHT side of the screen is a second stick: push UP/DOWN to climb and dive, LEFT/RIGHT to strafe — modern twin-stick flying. Dive to a street or rooftop to land, then walk and SPRINT with the left stick; flick the right stick UP to launch. On the ground, SLAM becomes a SEISMIC STOMP." />
+          <Row icon={<Move size={20} />} keyCap="RIGHT HALF" title="FLIGHT PAD & GROUND MODE"
+            desc="The ENTIRE RIGHT HALF of the screen is a touch pad (no button!): touch anywhere and drag — UP/DOWN climbs and dives, LEFT/RIGHT strafes. A subtle chevron shows your input direction. Dive to a street or rooftop to land, then walk and SPRINT with the left stick; flick the right pad UP to launch. On the ground, SLAM becomes a SEISMIC STOMP. Ability buttons live in one tidy cluster at the bottom-right corner; the minimap sits top-left." />
           <Row icon={<Flame size={20} />} keyCap="V (HOLD)" title="ATOMIC VISION"
             desc="Hold to fire a searing beam from the eyes. It melts a crater exactly where it touches — carve lines through towers and burn enemies. Drains energy while active." />
           <Row icon={<Zap size={20} />} keyCap="T" title="THUNDER STRIKE"
