@@ -157,7 +157,8 @@ for (let i = 0; i < 5; i++) {
 check("4-hit chain w/ spin backfist", sawStep3, sawStep3 ? "4th hit observed" : "chain never reached step 3");
 
 // ---------- 7) PORTRAIT MODE ----------
-const p = await launch.newPage({ viewport: { width: 270, height: 480 } });
+await page.close(); // free the single-threaded swiftshader GPU for the next page
+const p = await launch.newPage({ viewport: { width: 270, height: 480 }, hasTouch: true, isMobile: true });
 p.on("pageerror", (e) => errors.push("[portrait] " + e.message));
 await p.goto("http://localhost:4173/", { waitUntil: "load", timeout: 60000 });
 await p.waitForTimeout(9000);

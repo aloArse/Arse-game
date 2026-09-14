@@ -16,8 +16,8 @@ export interface HudState {
   bossMax: number;
   alt: number;           // altitude (m)
   spd: number;           // speed (km/h-ish)
-  cds: { strike: number; blast: number; dash: number; slam: number; cyclone: number; bolt: number };
-  cdMax: { strike: number; blast: number; dash: number; slam: number; cyclone: number; bolt: number };
+  cds: Record<string, number>;
+  cdMax: Record<string, number>;
   enCost: { blast: number; dash: number; slam: number; cyclone: number };
   blocking: boolean;     // hero is bracing
   flurry: boolean;       // hero is in barrage mode
@@ -30,6 +30,14 @@ export interface HudState {
   msgKind: "info" | "warn";
   hurt: number;
   time: number;
+  loadout: string[];      // active ability ids shown on screen
+  skin: string;           // active skin id
+  zoneOut: boolean;       // hero outside the battle zone
+  inSpace: boolean;       // above the atmosphere
+  planet: string;         // nearby planet name (space)
+  weatherLabel: string;   // fa weather label
+  ageNext: number;        // 0..1 progress to next birthday
+  fps: number;
 }
 
 export interface RunStats {
@@ -55,5 +63,7 @@ export function makeHud(): HudState {
     age: 18, power: 100, ageFlash: 0, bossName: "",
     msg: "", msgT: 0, msgKind: "info",
     hurt: 0, time: 0,
+    loadout: [], skin: "classic", zoneOut: false, inSpace: false, planet: "",
+    weatherLabel: "", ageNext: 0, fps: 60,
   };
 }

@@ -4,7 +4,9 @@ import { audio } from "./game/audio";
 import { clearAll } from "./game/input";
 import type { RunStats } from "./game/types";
 import Controls from "./components/Controls";
-import Hud from "./components/Hud";
+import Hud, { type PanelKind } from "./components/Hud";
+import { AbilitiesPanel, SkinsPanel, SettingsPanel } from "./components/Panels";
+import { settings } from "./game/settings";
 import { MainMenu, PauseMenu, GameOverMenu } from "./components/Menus";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 
@@ -21,6 +23,8 @@ export default function App() {
   const [bootError, setBootError] = useState<string | null>(null);
   const [bootAttempt, setBootAttempt] = useState(0);
   const [wideWarn, setWideWarn] = useState(false);
+  const [panel, setPanel] = useState<PanelKind | null>(null);
+  const [loadout, setLoadout] = useState<string[]>(settings.get().loadout);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -182,8 +186,8 @@ export default function App() {
 
       {game && screen === "playing" && (
         <>
-          <Hud game={game} muted={muted} onToggleMute={toggleMute} />
-          {!paused && <Controls game={game} />}
+          <Hud game={game} muted={muted} onToggleMute={toggleMute} onOpenPanel={(k) => setPanel(k)} />
+          {!paused && <Controls game={game} loadout={loadout} />}
           {paused && (
             <PauseMenu
               onResume={() => setPaused(false)}
@@ -194,6 +198,16 @@ export default function App() {
             />
           )}
         </>
+      )}
+
+      {game && panel === "abilities" && (
+        <AbilitiesPanel game={game} loadout={loadout} onClose={() => setPanel(null)} onApply={setLoadout} />
+      )}
+      {game && panel === "skins" && (
+        <SkinsPanel game={game} skin={game.hud.skin} onClose={() => setPanel(null)} />
+      )}
+      {game && panel === "settings" && (
+        <SettingsPanel game={game} onClose={() => setPanel(null)} muted={muted} onToggleMute={toggleMute} />
       )}
 
       {screen === "menu" && <MainMenu onStart={start} muted={muted} onToggleMute={toggleMute} />}

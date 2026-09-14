@@ -527,6 +527,26 @@ export class FX {
     slot.l.visible = true;
   }
 
+  /** cinematic explosion preset: core flash + shockwave + fireball + embers + smoke column */
+  explode(x: number, y: number, z: number, power = 1, color = 0xffb054): void {
+    const p = Math.max(0.4, Math.min(2.4, power));
+    this.flash(x, y, z, color, 7 * p, 0.22);
+    this.flash(x, y, z, 0xfff3d0, 3.4 * p, 0.14);
+    this.shock(x, y, z, color, 22 * p, 0.55);
+    this.ring(x, Math.max(0.6, y - 1), z, 0xffe2a0, 26 * p, 0.65, true, 2.1);
+    this.ring(x, Math.max(0.6, y - 1), z, color, 15 * p, 0.5, true, 1.4);
+    this.light(x, y + 2, z, color, 1500 * p, 0.55);
+    // fireball: hot core smoke tinted orange, fading to dark
+    this.smoke(x, y + 1, z, Math.round(7 * p), 9 * p, 4.4 * p, color, 0.8);
+    this.smoke(x, y + 2.2 * p, z, Math.round(9 * p), 13 * p, 6 * p, 0x3a3440, 3.2);
+    this.smoke(x, y + 4.4 * p, z, Math.round(6 * p), 16 * p, 8 * p, 0x2a2630, 4.2);
+    // embers
+    for (let i = 0; i < Math.round(16 * p); i++) {
+      this.spark(x, y + 1, z, i % 3 === 0 ? 0xffe9a0 : color, 3, 26 * p, 0.65, 0.6, -20, 1);
+    }
+    this.spark(x, y + 0.6, z, 0xfff6e0, 12, 34 * p, 0.4, 0.85, -26, 0.7);
+  }
+
   flash(x: number, y: number, z: number, color: number, maxR: number, dur: number): void {
     const f = this.flashes.find((q) => !q.active);
     if (!f) return;

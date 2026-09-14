@@ -1,12 +1,17 @@
 import { useEffect, useRef } from "react";
-import { Heart, Zap, Flame, Pause, Volume2, VolumeX, Skull, Trophy, Building2, Gauge } from "lucide-react";
+import { Heart, Zap, Flame, Pause, Volume2, VolumeX, Skull, Trophy, Building2, Gauge, Swords, Shirt, Settings2, Rocket } from "lucide-react";
 import type { Engine } from "../game3d/engine";
 import { tap } from "../game/input";
+import { settings } from "../game/settings";
+import Minimap from "./Minimap";
 
-export default function Hud({ game, muted, onToggleMute }: {
+export type PanelKind = "abilities" | "skins" | "settings";
+
+export default function Hud({ game, muted, onToggleMute, onOpenPanel }: {
   game: Engine;
   muted: boolean;
   onToggleMute: () => void;
+  onOpenPanel: (k: PanelKind) => void;
 }) {
   const hpFill = useRef<HTMLDivElement>(null);
   const hpGhost = useRef<HTMLDivElement>(null);
@@ -29,6 +34,10 @@ export default function Hud({ game, muted, onToggleMute }: {
   const ageEl = useRef<HTMLDivElement>(null);
   const ageWrap = useRef<HTMLDivElement>(null);
   const msgEl = useRef<HTMLDivElement>(null);
+  const zoneEl = useRef<HTMLDivElement>(null);
+  const planetEl = useRef<HTMLDivElement>(null);
+  const fpsEl = useRef<HTMLSpanElement>(null);
+  const ageBar = useRef<HTMLDivElement>(null);
   const st = useRef({ ghost: 1, combo: 0, msg: "" });
 
   useEffect(() => {
@@ -94,7 +103,22 @@ export default function Hud({ game, muted, onToggleMute }: {
         ageWrap.current.style.transform = flash ? "scale(1.14)" : "scale(1)";
         ageWrap.current.style.boxShadow = flash
           ? "inset 0 0 0 1px rgba(255,210,63,0.9), 0 0 20px rgba(255,180,40,0.7)" : "";
-        ageEl.current.textContent = `AGE ${hud.age} · PWR ${hud.power}%`;
+        ageEl.current.textContent = `سن ${hud.age} · قدرت ${hud.power}٪`;
+      }
+      if (ageBar.current) ageBar.current.style.transform = `scaleX(${Math.max(0, Math.min(1, hud.ageNext))})`;
+      if (zoneEl.current) {
+        zoneEl.current.style.opacity = hud.zoneOut ? "1" : "0";
+        zoneEl.current.style.transform = hud.zoneOut ? "translate(-50%,0) scale(1)" : "translate(-50%,0) scale(0.85)";
+      }
+      if (planetEl.current) {
+        planetEl.current.style.opacity = hud.planet ? "1" : "0";
+        if (hud.planet && planetEl.current.textContent !== `◄ ${hud.planet} ►`) {
+          planetEl.current.textContent = `◄ ${hud.planet} ►`;
+        }
+      }
+      if (fpsEl.current) {
+        fpsEl.current.textContent = `${hud.fps} FPS`;
+        fpsEl.current.parentElement!.style.opacity = settings.get().showFps ? "1" : "0";
       }
 
       if (msgEl.current) {
@@ -124,7 +148,7 @@ export default function Hud({ game, muted, onToggleMute }: {
   }, [game]);
 
   return (
-    <div className="pointer-events-none absolute inset-0">
+    <div className="pointer-events-none absolute inset-0 z-30">
       {/* crosshair */}
       <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-40">
         <div className="h-5 w-5 rounded-full border border-amber-200/70" />
@@ -155,15 +179,57 @@ export default function Hud({ game, muted, onToggleMute }: {
           <Flame size={12} className="shrink-0 text-amber-300" fill="currentColor" />
         </div>
 
-        <div ref={comboWrap} className="mt-4 origin-left opacity-0 transition-opacity duration-200">
+        <div ref={comboWrap} className="mt-3 origin-left opacity-0 transition-opacity duration-200">
           <div ref={comboNum} className="font-display text-4xl text-[#ffd23f] drop-shadow-[0_3px_0_rgba(122,16,32,0.9)]">×2</div>
           <div className="font-hud text-[11px] font-bold tracking-[0.42em] text-amber-100/80">COMBO</div>
+        </div>
+        <div className="mt-2">
+          <Minimap game={game} size={112} />
+        </div>
+      </div>
+
+      {/* zone warning */}
+      <div
+        ref={zoneEl}
+        className="absolute left-1/2 top-[max(7.6rem,calc(env(safe-area-inset-top)+7.2rem))] -translate-x-1/2 scale-95 opacity-0 transition-all duration-300"
+      >
+        <div className="chip rounded-lg border border-rose-400/40 px-3 py-1.5" style={{ animation: "zonePulse 1.2s ease-in-out infinite" }}>
+          <span className="font-hud text-[10px] font-bold tracking-[0.1em] text-rose-200">⚠ خارج از منطقهٔ نبرد — دشمنی دنبالت نمی‌آید</span>
+        </div>
+      </div>
+
+      {/* planet label (space) */}
+      <div ref={planetEl} className="absolute bottom-[max(0.9rem,env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 opacity-0 transition-opacity duration-500">
+        <div className="chip flex items-center gap-2 rounded-lg px-3 py-1.5">
+          <Rocket size={12} className="text-violet-300" />
+          <span className="font-hud text-[11px] font-bold tracking-[0.14em] text-violet-100" />
         </div>
       </div>
 
       {/* ---------- score / system ---------- */}
       <div className="absolute right-0 top-0 flex flex-col items-end gap-1.5 p-3" style={{ paddingTop: "max(0.8rem, env(safe-area-inset-top))" }}>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          <button
+            onPointerDown={(e) => { e.stopPropagation(); onOpenPanel("abilities"); }}
+            className="chip pointer-events-auto grid h-9 w-9 place-items-center rounded-lg text-sky-200 active:scale-90"
+            aria-label="Abilities panel"
+          >
+            <Swords size={15} />
+          </button>
+          <button
+            onPointerDown={(e) => { e.stopPropagation(); onOpenPanel("skins"); }}
+            className="chip pointer-events-auto grid h-9 w-9 place-items-center rounded-lg text-pink-200 active:scale-90"
+            aria-label="Skins panel"
+          >
+            <Shirt size={15} />
+          </button>
+          <button
+            onPointerDown={(e) => { e.stopPropagation(); onOpenPanel("settings"); }}
+            className="chip pointer-events-auto grid h-9 w-9 place-items-center rounded-lg text-emerald-200 active:scale-90"
+            aria-label="Settings panel"
+          >
+            <Settings2 size={15} />
+          </button>
           <button
             onPointerDown={(e) => { e.stopPropagation(); tap("pause"); }}
             className="chip pointer-events-auto grid h-9 w-9 place-items-center rounded-lg text-indigo-100 active:scale-90"
@@ -198,7 +264,13 @@ export default function Hud({ game, muted, onToggleMute }: {
           </div>
         </div>
         <div ref={ageWrap} className="chip rounded-lg px-2.5 py-1 transition-all duration-300">
-          <span ref={ageEl} className="font-hud text-[11px] font-bold tracking-[0.18em] text-emerald-200">AGE 18 · PWR 100%</span>
+          <span ref={ageEl} className="font-hud text-[11px] font-bold tracking-[0.12em] text-emerald-200">سن 18 · قدرت 100٪</span>
+          <div className="bar-shell mt-0.5 h-[3px] w-full">
+            <div ref={ageBar} className="bar-fill origin-right" style={{ background: "linear-gradient(90deg,#41e8a0,#9fe8ff)" }} />
+          </div>
+        </div>
+        <div className="chip rounded-lg px-2.5 py-1 opacity-0 transition-opacity">
+          <span ref={fpsEl} className="font-hud text-[9px] font-bold text-emerald-200">60 FPS</span>
         </div>
       </div>
 

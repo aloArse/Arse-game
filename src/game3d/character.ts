@@ -23,12 +23,65 @@ export interface Palette {
   mustache?: boolean;
   masked?: boolean;
   emblem?: "invincible" | "viltrum" | "none";
+  helmet?: boolean;        // armored space-helmet look
+  visorGlow?: number;      // emissive visor strip colour
+  shoulders?: boolean;     // heavy pauldrons
 }
 
 export const HERO_PAL: Palette = {
   suit: 0x2a5fe0, suitDark: 0x14307e, accent: 0xffd23f, accentDark: 0xc9991c,
   skin: 0xf3b389, eye: 0xffffff, masked: true, emblem: "invincible",
 };
+
+// ================= hero skins =================
+export interface SkinDef {
+  id: string;
+  name: string;
+  desc: string;
+  pal: Palette;
+}
+
+export const SKINS: SkinDef[] = [
+  {
+    id: "classic", name: "کلاسیک", desc: "لباس آبی و زرد امضا",
+    pal: { suit: 0x2a5fe0, suitDark: 0x14307e, accent: 0xffd23f, accentDark: 0xc9991c,
+      skin: 0xf3b389, eye: 0xffffff, masked: true, emblem: "invincible" },
+  },
+  {
+    id: "omni", name: "اومنی‌من", desc: "سفید و طلایی با شنل",
+    pal: { suit: 0xe8ecf4, suitDark: 0x9aa3b8, accent: 0xf2c14e, accentDark: 0xb8860b,
+      skin: 0xf3b389, eye: 0xffe27a, masked: false, emblem: "viltrum",
+      hair: 0xf8f8fc, cape: 0x2a5fe0, capeInner: 0x14307e, mustache: true },
+  },
+  {
+    id: "midnight", name: "نیمه‌شب", desc: "زرهٔ تاریک با نقاب نئونی",
+    pal: { suit: 0x14161f, suitDark: 0x0a0b12, accent: 0x2ee6ff, accentDark: 0x0f7f96,
+      skin: 0xd8a87e, eye: 0x2ee6ff, masked: true, emblem: "none",
+      helmet: true, visorGlow: 0x2ee6ff, shoulders: true },
+  },
+  {
+    id: "solar", name: "خورشیدی", desc: "انرژی خورشید در رگ‌ها",
+    pal: { suit: 0xff7a1a, suitDark: 0xa83f05, accent: 0xffe9a0, accentDark: 0xd8a03c,
+      skin: 0xf3b389, eye: 0xffd23f, masked: true, emblem: "invincible",
+      visorGlow: 0xffc23f },
+  },
+  {
+    id: "viltrum", name: "ویلترامی", desc: "جنگ‌سالار قرمز و خاکستری",
+    pal: { suit: 0x8f95a3, suitDark: 0x565b68, accent: 0xd32436, accentDark: 0x8e121f,
+      skin: 0xe8ab80, eye: 0xffe27a, masked: false, emblem: "viltrum",
+      hair: 0x2b2b33, cape: 0xd32436, capeInner: 0x6d0d18, shoulders: true },
+  },
+  {
+    id: "nova", name: "نووا", desc: "کوانتوم بنفش درخشان",
+    pal: { suit: 0x6a2fd8, suitDark: 0x3a1678, accent: 0xff4fd8, accentDark: 0xb02a94,
+      skin: 0xc9a0e0, eye: 0xff9fff, masked: true, emblem: "none",
+      visorGlow: 0xff4fd8, shoulders: true },
+  },
+];
+
+export function skinById(id: string): SkinDef {
+  return SKINS.find((sk) => sk.id === id) ?? SKINS[0];
+}
 
 export const BOSS_PAL: Palette = {
   suit: 0xf4f5fa, suitDark: 0xc0c5d6, accent: 0xd32436, accentDark: 0x8e121f,
@@ -633,6 +686,37 @@ export class Rig {
       strap.position.set(0, -0.045, 0.05);
       head.add(strap);
 
+      // ---- optional armored helmet ----
+      if (pal.helmet) {
+        const helmMat = mk(pal.suitDark, { metalness: 0.55, roughness: 0.3, clearcoat: 0.9 });
+        const dome = new THREE.Mesh(keep(new THREE.SphereGeometry(0.185, 22, 16, 0, Math.PI * 2, 0, Math.PI * 0.62)), helmMat);
+        dome.scale.set(1.02, 1.1, 1.08);
+        dome.position.y = 0.045;
+        head.add(dome);
+        const fin = new THREE.Mesh(keep(new THREE.BoxGeometry(0.02, 0.16, 0.2)), mk(pal.accent, { metalness: 0.5, roughness: 0.3 }));
+        fin.position.set(0, 0.2, -0.02);
+        head.add(fin);
+        for (const sx of [-1, 1]) {
+          const pod = new THREE.Mesh(keep(new THREE.CylinderGeometry(0.045, 0.045, 0.03, 12)), mk(pal.accent, { metalness: 0.5, roughness: 0.35 }));
+          pod.rotation.z = Math.PI / 2;
+          pod.position.set(sx * 0.165, 0.03, 0);
+          head.add(pod);
+        }
+      }
+      if (pal.visorGlow !== undefined) {
+        const visor = new THREE.Mesh(
+          keep(new THREE.TorusGeometry(0.152, 0.036, 10, 26, Math.PI * 1.16)),
+          new THREE.MeshStandardMaterial({
+            color: pal.visorGlow, emissive: new THREE.Color(pal.visorGlow),
+            emissiveIntensity: 2.6, roughness: 0.15, metalness: 0.2,
+          }),
+        );
+        visor.rotation.set(Math.PI / 2, 0, Math.PI * 1.42);
+        visor.position.set(0, 0.028, 0.012);
+        visor.scale.set(1.06, 1.06, 0.92);
+        head.add(visor);
+      }
+
       // ---- signature goggle visor ----
       const band = new THREE.Mesh(keep(new THREE.TorusGeometry(0.152, 0.038, 10, 26, Math.PI * 1.16)), accent);
       band.rotation.set(Math.PI / 2, 0, Math.PI * 1.42);
@@ -717,6 +801,12 @@ export class Rig {
       this.joints[shName] = sh;
 
       // deltoid
+      if (pal.shoulders) {
+        const pauldron = new THREE.Mesh(sphere(0.152), mk(pal.accentDark, { metalness: 0.45, roughness: 0.34, clearcoat: 0.8 }));
+        pauldron.position.y = 0.03;
+        pauldron.scale.set(1.02, 0.82, 1.02);
+        sh.add(pauldron);
+      }
       const delt = new THREE.Mesh(sphere(0.115), suit);
       delt.scale.set(1.05, 1.12, 1.05);
       sh.add(delt);

@@ -1,97 +1,117 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Hand, Zap, Wind, Orbit, Flame, Move, ChevronUp, ChevronDown, Grab,
-  Tornado, Shield, Eye, CloudLightning,
+  Hand, Zap, Wind, ArrowDownToLine, Tornado, CloudLightning, Flame, Grab,
+  Sparkles, Workflow, CircleDot, Rocket, Shield, BatteryCharging,
 } from "lucide-react";
 import type { Engine } from "../game3d/engine";
-import { pad, touch, tap } from "../game/input";
+import {
+  pad, pad2, tap, touch,
+  type TapName,
+} from "../game/input";
+import { abilityById, type AbilityDef } from "../game/abilities";
 
-type BtnName = "strike" | "blast" | "dash" | "slam" | "cyclone" | "bolt";
-const CD_BTNS: BtnName[] = ["strike", "blast", "dash", "slam", "cyclone", "bolt"];
+/* ------------------------------------------------------------------ */
+/*  Twin-stick touch controls:                                         */
+/*   · left  stick — move (ground + flight)                            */
+/*   · right stick — flight: up/down altitude + left/right strafe      */
+/*   · ability cluster driven by the loadout, with cooldown arcs       */
+/* ------------------------------------------------------------------ */
 
-export default function Controls({ game }: { game: Engine }) {
+const ICONS: Record<string, typeof Hand> = {
+  strike: Hand, blast: Zap, dash: Wind, slam: ArrowDownToLine,
+  cyclone: Tornado, bolt: CloudLightning, vision: Flame, grab: Grab,
+  meteor: Sparkles, chain: Workflow, bubble: CircleDot, missile: Rocket,
+};
+
+function pressAbility(a: AbilityDef): void {
+  if (a.kind === "hold") {
+    if (a.id === "strike") { touch.strike = true; tap("strike"); }
+    else if (a.id === "blast") touch.blast = true;
+    else if (a.id === "vision") touch.vision = true;
+  } else {
+    tap(a.id as TapName);
+  }
+}
+
+function releaseAbility(a: AbilityDef): void {
+  if (a.id === "strike") touch.strike = false;
+  else if (a.id === "blast") touch.blast = false;
+  else if (a.id === "vision") touch.vision = false;
+}
+
+/* ---------- one ability button ---------- */
+function AbilityBtn({ a, register, onHold }: {
+  a: AbilityDef;
+  register: (id: string, el: HTMLDivElement | null) => void;
+  onHold: (a: AbilityDef, el: HTMLButtonElement | null, down: boolean) => void;
+}) {
+  const Icon = ICONS[a.id] ?? Hand;
+  const cdRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    register(a.id, cdRef.current);
+    return () => register(a.id, null);
+  }, [a.id, register]);
+  return (
+    <button
+      aria-label={a.name}
+      className="abtn absolute h-[48px] w-[48px]"
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+        onHold(a, e.currentTarget, true);
+      }}
+      onPointerUp={() => onHold(a, null, false)}
+      onPointerCancel={() => onHold(a, null, false)}
+      onPointerLeave={(e) => { if (e.buttons === 0) return; onHold(a, null, false); }}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <Icon size={20} strokeWidth={2.6} />
+      <span className="pointer-events-none font-hud text-[7px] font-bold leading-none tracking-[0.06em] text-indigo-100/90">{a.fa}</span>
+      <div
+        ref={cdRef}
+        className="pointer-events-none absolute inset-0 rounded-full"
+        style={{ background: "conic-gradient(rgba(4,6,16,0.66) 0deg, transparent 0deg)" }}
+      />
+    </button>
+  );
+}
+
+/* ================================================================== */
+export default function Controls({ game, loadout }: { game: Engine; loadout: string[] }) {
+  /* ---------- left stick state ---------- */
   const [joy, setJoy] = useState<{ id: number; ax: number; ay: number; bx: number; by: number; dx: number; dy: number } | null>(null);
-  const [pressed, setPressed] = useState<Record<string, boolean>>({});
   const [everUsed, setEverUsed] = useState(false);
-
-  const ovRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const btnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const odBtnRef = useRef<HTMLButtonElement>(null);
-  const odRingRef = useRef<HTMLDivElement>(null);
-  const blockBtnRef = useRef<HTMLButtonElement>(null);
-  const strikeBtnRef = useRef<HTMLButtonElement>(null);
-  const visionBtnRef = useRef<HTMLButtonElement>(null);
   const maxedRef = useRef(false);
 
-  /* ---------- auto-scale: the cluster always fits the actual screen ---------- */
-  const [scale, setScale] = useState(1);
-  useEffect(() => {
-    const compute = () => {
-      const w = window.innerWidth, h = window.innerHeight;
-      const portrait = h >= w;
-      const designW = portrait ? 232 : 286;
-      const designH = portrait ? 452 : 252;
-      const availW = portrait ? w * 0.66 : w * 0.8;
-      const availH = h * 0.82;
-      setScale(Math.max(0.5, Math.min(1, availW / designW, availH / designH)));
-    };
-    compute();
-    window.addEventListener("resize", compute);
-    window.addEventListener("orientationchange", compute);
-    return () => {
-      window.removeEventListener("resize", compute);
-      window.removeEventListener("orientationchange", compute);
-    };
-  }, []);
+  /* ---------- right flight stick state ---------- */
+  const [joy2, setJoy2] = useState<{ id: number; ax: number; ay: number; bx: number; by: number; dx: number; dy: number } | null>(null);
+  const maxed2Ref = useRef(false);
 
-  /* ---------- live cooldown painting (rAF, no react churn) ---------- */
+  /* ---------- fixed buttons (overdrive / brace) ---------- */
+  const [odOn, setOdOn] = useState(false);
+  const [braceOn, setBraceOn] = useState(false);
+
+  /* ---------- cooldown arc refs ---------- */
+  const cdEls = useRef(new Map<string, HTMLDivElement>());
+
+  const register = useRef((id: string, el: HTMLDivElement | null) => {
+    if (el) cdEls.current.set(id, el);
+    else cdEls.current.delete(id);
+  }).current;
+
+  /* ---------- raf: cooldown arcs ---------- */
   useEffect(() => {
     let raf = 0;
     const tick = () => {
-      const hud = game.hud;
-      for (const b of CD_BTNS) {
-        const ov = ovRefs.current[b];
-        const el = btnRefs.current[b];
-        if (!ov || !el) continue;
-        const cd = hud.cds[b];
-        const max = hud.cdMax[b] || 1;
-        const k = Math.max(0, Math.min(1, cd / max));
-        ov.style.background = k > 0.001
-          ? `conic-gradient(transparent ${(1 - k) * 360}deg, rgba(4,7,18,0.8) 0deg)`
-          : "none";
-        ov.textContent = k > 0.03 && max > 0.5 ? cd.toFixed(1) : "";
-        const cost =
-          b === "blast" ? hud.enCost.blast :
-            b === "dash" ? hud.enCost.dash :
-              b === "slam" ? hud.enCost.slam :
-                b === "cyclone" ? hud.enCost.cyclone : 0;
-        const poor = cost > 0 && hud.en < cost;
-        el.style.opacity = poor ? "0.42" : "1";
-        el.style.filter = poor ? "saturate(0.35)" : "";
-      }
-      const od = odBtnRef.current;
-      const ring = odRingRef.current;
-      if (od && ring) {
-        const ready = hud.od >= 100 && hud.odT <= 0;
-        const active = hud.odT > 0;
-        const deg = Math.max(0, Math.min(100, hud.od)) * 3.6;
-        ring.style.background = `conic-gradient(${active ? "#ff5a3c" : "#ffd23f"} ${deg}deg, rgba(90,100,140,0.3) 0deg)`;
-        od.classList.toggle("pulse-ready", ready);
-        od.style.opacity = hud.od > 3 || active ? "1" : "0.4";
-      }
-      const blk = blockBtnRef.current;
-      if (blk) {
-        blk.style.filter = hud.blocking ? "brightness(1.6) saturate(1.4)" : "";
-        blk.style.boxShadow = hud.blocking
-          ? "inset 0 0 0 2px rgba(110,203,255,0.9), 0 0 22px rgba(110,203,255,0.55)" : "";
-      }
-      const strike = strikeBtnRef.current;
-      if (strike) strike.style.filter = hud.flurry ? "brightness(1.5) saturate(1.3)" : "";
-      const vis = visionBtnRef.current;
-      if (vis) {
-        const on = hud.en > 2;
-        vis.style.filter = on ? "brightness(1.45) saturate(1.4)" : "";
-        vis.style.boxShadow = on ? "inset 0 0 0 2px rgba(255,120,80,0.75), 0 0 16px rgba(255,120,80,0.4)" : "";
+      const cds = game.hud.cds;
+      const cdMax = game.hud.cdMax;
+      for (const [id, el] of cdEls.current) {
+        const c = cds[id] ?? 0;
+        const m = cdMax[id] ?? 1;
+        const k = m > 0.05 ? Math.max(0, Math.min(1, c / m)) : 0;
+        el.style.background = `conic-gradient(rgba(4,6,16,0.66) ${k * 360}deg, transparent ${k * 360}deg)`;
+        el.style.opacity = k > 0.02 ? "1" : "0";
       }
       raf = requestAnimationFrame(tick);
     };
@@ -99,22 +119,74 @@ export default function Controls({ game }: { game: Engine }) {
     return () => cancelAnimationFrame(raf);
   }, [game]);
 
+  /* ---------- stuck-hold safety net ---------- */
+  const releaseRef = useRef<(a: AbilityDef) => void>(() => {});
+  releaseRef.current = (a: AbilityDef) => releaseAbility(a);
+  useEffect(() => {
+    const active = new Set<number>();
+    const holds = new Map<number, AbilityDef>();
+    const dn = (e: PointerEvent) => { active.add(e.pointerId); };
+    const up = (e: PointerEvent) => {
+      active.delete(e.pointerId);
+      const a = holds.get(e.pointerId);
+      if (a) { holds.delete(e.pointerId); releaseRef.current(a); }
+      // no touch pointers left anywhere → nothing may stay held
+      if (active.size === 0 && e.pointerType !== "mouse") {
+        touch.strike = false; touch.blast = false; touch.vision = false;
+        touch.up = false; touch.down = false; touch.block = false;
+        setOdOn(false); setBraceOn(false);
+      }
+    };
+    window.addEventListener("pointerdown", dn, { capture: true, passive: true });
+    window.addEventListener("pointerup", up, { capture: true, passive: true });
+    window.addEventListener("pointercancel", up, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener("pointerdown", dn, { capture: true, passive: true } as EventListenerOptions);
+      window.removeEventListener("pointerup", up, { capture: true, passive: true } as EventListenerOptions);
+      window.removeEventListener("pointercancel", up, { capture: true, passive: true } as EventListenerOptions);
+    };
+  }, []);
   useEffect(() => () => {
-    pad.active = false;
-    touch.blast = false; touch.strike = false; touch.up = false; touch.down = false; touch.block = false; touch.vision = false;
+    pad.active = false; pad2.active = false;
+    touch.blast = false; touch.strike = false; touch.vision = false;
+    touch.up = false; touch.down = false; touch.block = false;
   }, []);
 
-  /* ---------- floating joystick (leashed dynamic base) ---------- */
-  const MAXR = 58;
-  const LEASH = 84;
+  const holdWrap = (a: AbilityDef, _el: HTMLButtonElement | null, down: boolean) => {
+    if (down) pressAbility(a);
+    else releaseAbility(a);
+  };
+
+  /* ---------- auto-scale ---------- */
+  const [scale, setScale] = useState({ p: 1, l: 1 });
+  useEffect(() => {
+    const calc = () => {
+      const w = window.innerWidth, h = window.innerHeight;
+      const portrait = h >= w;
+      // portrait: left column 56×412 design · right cluster 150×310 design
+      // landscape: left cluster 122×242 design · right cluster 140×250 design
+      const pd = { w: 56, h: 412 }, ld = { w: 122, h: 242 };
+      const rd = portrait ? { w: 150, h: 310 } : { w: 140, h: 250 };
+      const sp = Math.max(0.5, Math.min(1, (w * 0.3) / pd.w, (h * 0.86) / pd.h));
+      const sl = Math.max(0.5, Math.min(1, (w * 0.36) / ld.w, (h * 0.9) / ld.h, (w * 0.4) / rd.w));
+      setScale({ p: sp, l: sl });
+    };
+    calc();
+    window.addEventListener("resize", calc);
+    window.addEventListener("orientationchange", calc);
+    return () => { window.removeEventListener("resize", calc); window.removeEventListener("orientationchange", calc); };
+  }, []);
+
+  /* ---------- joysticks (leashed dynamic base) ---------- */
+  const MAXR = 58, LEASH = 84;
+  const MAXR2 = 54, LEASH2 = 76;
 
   const onZoneDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (joy) return;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
     setEverUsed(true);
     maxedRef.current = false;
-    pad.active = true;
-    pad.x = 0; pad.y = 0; pad.mag = 0;
+    pad.active = true; pad.x = 0; pad.y = 0; pad.mag = 0;
     setJoy({ id: e.pointerId, ax: e.clientX, ay: e.clientY, bx: e.clientX, by: e.clientY, dx: 0, dy: 0 });
   };
   const onZoneMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -122,90 +194,93 @@ export default function Controls({ game }: { game: Engine }) {
     let dx = e.clientX - joy.bx;
     let dy = e.clientY - joy.by;
     const len = Math.hypot(dx, dy);
-    let bx = joy.bx;
-    let by = joy.by;
+    let bx = joy.bx, by = joy.by;
     if (len > MAXR) {
       let nx = e.clientX - (dx / len) * MAXR;
       let ny = e.clientY - (dy / len) * MAXR;
       const adx = nx - joy.ax, ady = ny - joy.ay;
       const ad = Math.hypot(adx, ady);
-      if (ad > LEASH) {
-        nx = joy.ax + (adx / ad) * LEASH;
-        ny = joy.ay + (ady / ad) * LEASH;
-      }
+      if (ad > LEASH) { nx = joy.ax + (adx / ad) * LEASH; ny = joy.ay + (ady / ad) * LEASH; }
       const el = e.currentTarget as HTMLElement;
       const r = el.getBoundingClientRect();
       nx = Math.min(Math.max(nx, r.left + 74), r.right - 74);
       ny = Math.min(Math.max(ny, r.top + 74), r.bottom - 74);
-      dx = e.clientX - nx;
-      dy = e.clientY - ny;
+      dx = e.clientX - nx; dy = e.clientY - ny;
       const l2 = Math.hypot(dx, dy) || 1;
       dx = (dx / l2) * Math.min(l2, MAXR);
       dy = (dy / l2) * Math.min(l2, MAXR);
       bx = nx; by = ny;
     }
-    pad.x = dx / MAXR;
-    pad.y = dy / MAXR;
+    pad.x = dx / MAXR; pad.y = dy / MAXR;
     pad.mag = Math.min(1, Math.hypot(dx, dy) / MAXR);
-    if (len > MAXR && !maxedRef.current) {
-      maxedRef.current = true;
-      navigator.vibrate?.(6);
-    } else if (len < MAXR * 0.85) {
-      maxedRef.current = false;
-    }
+    if (len > MAXR && !maxedRef.current) { maxedRef.current = true; navigator.vibrate?.(6); }
+    else if (len < MAXR * 0.85) maxedRef.current = false;
     setJoy({ ...joy, bx, by, dx, dy });
   };
   const onZoneUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!joy || e.pointerId !== joy.id) return;
-    pad.active = false;
-    pad.x = 0; pad.y = 0; pad.mag = 0;
+    pad.active = false; pad.x = 0; pad.y = 0; pad.mag = 0;
     setJoy(null);
   };
 
-  /* ---------- buttons ---------- */
-  const bind = (name: BtnName | "over" | "up" | "down" | "grab" | "block" | "vision") => ({
-    onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => {
-      e.preventDefault();
-      e.stopPropagation();
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-      setPressed((p) => ({ ...p, [name]: true }));
-      if (name === "strike") { touch.strike = true; tap("strike"); }
-      else if (name === "blast") touch.blast = true;
-      else if (name === "up") touch.up = true;
-      else if (name === "down") touch.down = true;
-      else if (name === "block") touch.block = true;
-      else if (name === "vision") touch.vision = true;
-      else tap(name);
-    },
-    onPointerUp: () => release(name),
-    onPointerCancel: () => release(name),
-    onPointerLeave: (e: React.PointerEvent<HTMLButtonElement>) => {
-      if (e.buttons === 0) return;
-      release(name);
-    },
-    onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
-  });
-
-  const release = (name: string) => {
-    setPressed((p) => ({ ...p, [name]: false }));
-    if (name === "strike") touch.strike = false;
-    if (name === "blast") touch.blast = false;
-    if (name === "up") touch.up = false;
-    if (name === "down") touch.down = false;
-    if (name === "block") touch.block = false;
-    if (name === "vision") touch.vision = false;
+  /* ---------- flight stick (right) ---------- */
+  const onZone2Down = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (joy2) return;
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
+    maxed2Ref.current = false;
+    pad2.active = true; pad2.x = 0; pad2.y = 0; pad2.mag = 0;
+    setJoy2({ id: e.pointerId, ax: e.clientX, ay: e.clientY, bx: e.clientX, by: e.clientY, dx: 0, dy: 0 });
+  };
+  const onZone2Move = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!joy2 || e.pointerId !== joy2.id) return;
+    let dx = e.clientX - joy2.bx;
+    let dy = e.clientY - joy2.by;
+    const len = Math.hypot(dx, dy);
+    let bx = joy2.bx, by = joy2.by;
+    if (len > MAXR2) {
+      let nx = e.clientX - (dx / len) * MAXR2;
+      let ny = e.clientY - (dy / len) * MAXR2;
+      const adx = nx - joy2.ax, ady = ny - joy2.ay;
+      const ad = Math.hypot(adx, ady);
+      if (ad > LEASH2) { nx = joy2.ax + (adx / ad) * LEASH2; ny = joy2.ay + (ady / ad) * LEASH2; }
+      const el = e.currentTarget as HTMLElement;
+      const r = el.getBoundingClientRect();
+      nx = Math.min(Math.max(nx, r.left + 68), r.right - 68);
+      ny = Math.min(Math.max(ny, r.top + 68), r.bottom - 68);
+      dx = e.clientX - nx; dy = e.clientY - ny;
+      const l2 = Math.hypot(dx, dy) || 1;
+      dx = (dx / l2) * Math.min(l2, MAXR2);
+      dy = (dy / l2) * Math.min(l2, MAXR2);
+      bx = nx; by = ny;
+    }
+    pad2.x = dx / MAXR2; pad2.y = dy / MAXR2;
+    pad2.mag = Math.min(1, Math.hypot(dx, dy) / MAXR2);
+    if (len > MAXR2 && !maxed2Ref.current) { maxed2Ref.current = true; navigator.vibrate?.(6); }
+    setJoy2({ ...joy2, bx, by, dx, dy });
+  };
+  const onZone2Up = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!joy2 || e.pointerId !== joy2.id) return;
+    pad2.active = false; pad2.x = 0; pad2.y = 0; pad2.mag = 0;
+    setJoy2(null);
   };
 
-  const hint = (t: string) => <span className="key-hint kbd-only">{t}</span>;
-  const label = (t: string) => (
-    <span className="pointer-events-none font-hud text-[7px] font-bold leading-none tracking-[0.1em] text-indigo-100/90">
-      {t}
-    </span>
+  const abilities = loadout.map((id) => abilityById(id)).filter(Boolean) as AbilityDef[];
+
+  /* ---------- joystick visuals ---------- */
+  const stick = (j: typeof joy, base: number, knob: number) => j && (
+    <>
+      <div className="joy-base" style={{ left: j.bx - base, top: j.by - base, width: base * 2, height: base * 2 }} />
+      <div className="joy-ring" style={{ left: j.ax - base * 1.35, top: j.ay - base * 1.35, width: base * 2.7, height: base * 2.7 }} />
+      <div
+        className="joy-knob"
+        style={{ left: j.bx + j.dx - knob, top: j.by + j.dy - knob, width: knob * 2, height: knob * 2 }}
+      />
+    </>
   );
 
   return (
     <>
-      {/* ---------- joystick zone (left half) ---------- */}
+      {/* ---------- move stick zone (left) ---------- */}
       <div
         className="absolute left-0 top-0 z-10 h-full w-[44%] portrait:w-[52%]"
         style={{ touchAction: "none" }}
@@ -215,390 +290,130 @@ export default function Controls({ game }: { game: Engine }) {
         onPointerCancel={onZoneUp}
         onContextMenu={(e) => e.preventDefault()}
       >
-        {!joy && (
-          <div
-            className={`absolute bottom-[14%] left-[15%] flex flex-col items-center gap-2 transition-opacity duration-700 ${
-              everUsed ? "opacity-0" : "opacity-60"
-            }`}
-          >
-            <div className="joy-base relative h-[104px] w-[104px]">
-              <Move className="absolute inset-0 m-auto text-indigo-200/70" size={30} />
-              {[0, 45, 90, 135, 180, 225, 270, 315].map((a) => (
-                <span
-                  key={a}
-                  className="absolute left-1/2 top-1/2 h-[7px] w-[2px] rounded bg-indigo-200/25"
-                  style={{ transform: `rotate(${a}deg) translateY(-52px)`, transformOrigin: "0 0" }}
-                />
-              ))}
-            </div>
-            <span className="font-hud text-[11px] font-bold tracking-[0.3em] text-indigo-100/80">DRAG TO FLY</span>
-            <span className="font-hud text-[10px] font-bold tracking-[0.2em] text-indigo-100/50">DIVE TO LAND · UP TO LAUNCH</span>
+        {!everUsed && !joy && (
+          <div className="pointer-events-none absolute left-[12%] top-[38%] -translate-x-1/2 text-center">
+            <div className="joy-base opacity-70" style={{ left: -60, top: -60, width: 120, height: 120 }} />
+            <div className="mt-[76px] font-hud text-[10px] tracking-widest text-white/45">حرکت</div>
           </div>
         )}
-        {joy && (() => {
-          const len = Math.hypot(joy.dx, joy.dy);
-          const mag = Math.min(1, len / MAXR);
-          const ang = (Math.atan2(joy.dy, joy.dx) * 180) / Math.PI;
-          const cruise = mag > 0.75;
-          return (
-            <>
-              <div className="joy-base" style={{ left: joy.bx - 60, top: joy.by - 60, width: 120, height: 120 }} />
-              {[0, 45, 90, 135, 180, 225, 270, 315].map((a) => (
-                <span
-                  key={a}
-                  className="pointer-events-none absolute rounded"
-                  style={{
-                    left: joy.bx, top: joy.by,
-                    width: 2, height: 7,
-                    background: "rgba(160,185,255,0.3)",
-                    transform: `rotate(${a}deg) translateY(-56px)`,
-                    transformOrigin: "0 0",
-                  }}
-                />
-              ))}
-              <div
-                className="pointer-events-none absolute rounded-full"
-                style={{
-                  left: joy.bx - 60, top: joy.by - 60, width: 120, height: 120,
-                  padding: 4,
-                  background: `conic-gradient(from -90deg, ${cruise ? "#ff7a3c" : "#ffd23f"} ${mag * 360}deg, rgba(120,140,200,0.18) 0deg)`,
-                  WebkitMask: "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)",
-                  WebkitMaskComposite: "xor",
-                  maskComposite: "exclude",
-                  opacity: 0.5 + mag * 0.5,
-                }}
-              />
-              {mag > 0.15 && (
-                <div
-                  className="pointer-events-none absolute"
-                  style={{
-                    left: joy.bx, top: joy.by, width: 0, height: 0,
-                    transform: `rotate(${ang}deg)`,
-                  }}
-                >
-                  <div
-                    style={{
-                      position: "absolute", left: 42, top: -5,
-                      width: 0, height: 0,
-                      borderTop: "5px solid transparent",
-                      borderBottom: "5px solid transparent",
-                      borderLeft: `12px solid rgba(255,210,63,${0.35 + mag * 0.6})`,
-                    }}
-                  />
-                </div>
-              )}
-              <div
-                className="joy-knob"
-                style={{ left: joy.bx - 27 + joy.dx * 0.72, top: joy.by - 27 + joy.dy * 0.72, width: 54, height: 54 }}
-              />
-            </>
-          );
-        })()}
+        {stick(joy, 60, 27)}
       </div>
 
-      {/* ================= LANDSCAPE CLUSTER ================= */}
+      {/* ---------- flight stick zone (right-bottom) ---------- */}
       <div
-        className="absolute right-2 bottom-[max(0.9rem,env(safe-area-inset-bottom))] z-20 origin-bottom-right portrait:hidden"
-        style={{ touchAction: "none", transform: `scale(${scale})` }}
+        className="absolute bottom-0 right-0 z-10 h-[46%] w-[46%] landscape:h-[70%] landscape:w-[52%]"
+        style={{ touchAction: "none" }}
+        onPointerDown={onZone2Down}
+        onPointerMove={onZone2Move}
+        onPointerUp={onZone2Up}
+        onPointerCancel={onZone2Up}
         onContextMenu={(e) => e.preventDefault()}
       >
-        <div className="relative h-[236px] w-[268px]">
-          {/* altitude thrusters — left edge column */}
-          <button
-            {...bind("up")}
-            aria-label="Ascend"
-            className={`abtn absolute left-0 top-[10px] h-[50px] w-[50px] ${pressed.up ? "pressed" : ""}`}
-          >
-            <ChevronUp size={26} strokeWidth={3} />
-            {label("UP")}
-          </button>
-          <button
-            {...bind("down")}
-            aria-label="Descend"
-            className={`abtn absolute left-0 top-[70px] h-[50px] w-[50px] ${pressed.down ? "pressed" : ""}`}
-          >
-            <ChevronDown size={26} strokeWidth={3} />
-            {label("DOWN")}
-          </button>
+        {!joy2 && (
+          <div className="pointer-events-none absolute bottom-[14%] right-[16%] text-center">
+            <div className="joy-base opacity-60" style={{ position: "relative", left: "50%", marginLeft: -55, top: -55, width: 110, height: 110 }} />
+            <div className="mt-2 font-hud text-[10px] tracking-widest text-white/40">پرواز ↑↓</div>
+          </div>
+        )}
+        {stick(joy2, 55, 25)}
+      </div>
 
-          {/* overdrive */}
-          <button
-            ref={odBtnRef}
-            {...bind("over")}
-            aria-label="Overdrive"
-            className={`abtn absolute left-[128px] top-[6px] h-[50px] w-[50px] transition-opacity ${pressed.over ? "pressed" : ""}`}
-            style={{ opacity: 0.4 }}
-          >
-            <div
-              ref={odRingRef}
-              className="absolute inset-[-3px] rounded-full"
-              style={{
-                padding: 3,
-                WebkitMask: "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)",
-                WebkitMaskComposite: "xor",
-                maskComposite: "exclude",
-              }}
-            />
-            <Flame size={22} className="drop-shadow-[0_0_6px_rgba(255,150,40,0.8)]" />
-            {label("RAGE")}
-            {hint("I")}
-          </button>
+      {/* ================= PORTRAIT ability column (left) ================= */}
+      <div
+        className="absolute left-2 bottom-[max(0.9rem,env(safe-area-inset-bottom))] z-20 origin-bottom-left landscape:hidden"
+        style={{ touchAction: "none", transform: `scale(${scale.p})` }}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        <div className="relative h-[412px] w-[56px]">
+          {abilities.map((a, i) => (
+            <div key={a.id} className="absolute left-0" style={{ top: 4 + i * 67 }}>
+              <AbilityBtn a={a} register={register} onHold={holdWrap} />
+            </div>
+          ))}
+        </div>
+      </div>
 
-          {/* grab */}
+      {/* ================= PORTRAIT right cluster (overdrive + brace) ================= */}
+      <div
+        className="absolute right-2 top-[max(3.9rem,calc(env(safe-area-inset-top)+3.2rem))] z-20 origin-top-right landscape:hidden"
+        style={{ touchAction: "none", transform: `scale(${scale.p})` }}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        <div className="relative h-[120px] w-[56px]">
           <button
-            {...bind("grab")}
-            aria-label="Grab or thunder clap"
-            className={`abtn absolute left-[64px] top-[70px] h-[52px] w-[52px] ${pressed.grab ? "pressed" : ""}`}
-          >
-            <Grab size={22} />
-            {label("GRAB")}
-            {hint("G")}
-          </button>
-
-          {/* vision (hold) */}
-          <button
-            ref={(r) => { visionBtnRef.current = r; }}
-            {...bind("vision")}
-            aria-label="Atomic vision"
-            className={`abtn absolute left-[128px] top-[66px] h-[50px] w-[50px] ${pressed.vision ? "pressed" : ""}`}
-          >
-            <Eye size={22} className="text-orange-300" />
-            {label("VISION")}
-            {hint("V · HOLD")}
-          </button>
-
-          {/* thunder bolt */}
-          <button
-            ref={(r) => { btnRefs.current.bolt = r; }}
-            {...bind("bolt")}
-            aria-label="Thunder strike"
-            className={`abtn absolute left-[64px] top-[6px] h-[52px] w-[52px] ${pressed.bolt ? "pressed" : ""}`}
-          >
-            <CloudLightning size={24} className="text-sky-200" />
-            <div ref={(r) => { ovRefs.current.bolt = r; }} className="cd-sweep font-hud text-lg" />
-            {label("BOLT")}
-            {hint("T")}
-          </button>
-
-          {/* block */}
-          <button
-            ref={blockBtnRef}
-            {...bind("block")}
             aria-label="Brace"
-            className={`abtn absolute left-[64px] top-[132px] h-[54px] w-[54px] transition-all ${pressed.brace ? "pressed" : ""}`}
-          >
-            <Shield size={24} className="text-sky-300" />
-            {label("BRACE")}
-          </button>
-
-          {/* cyclone */}
-          <button
-            ref={(r) => { btnRefs.current.cyclone = r; }}
-            {...bind("cyclone")}
-            aria-label="Cyclone spin"
-            className={`abtn absolute left-[122px] top-[126px] h-[54px] w-[54px] ${pressed.cyclone ? "pressed" : ""}`}
-          >
-            <Tornado size={25} className="text-amber-300" />
-            <div ref={(r) => { ovRefs.current.cyclone = r; }} className="cd-sweep font-hud text-lg" />
-            {label("CYCLONE")}
-          </button>
-
-          {/* slam */}
-          <button
-            ref={(r) => { btnRefs.current.slam = r; }}
-            {...bind("slam")}
-            aria-label="Nova slam, pile-driver or ground stomp"
-            className={`abtn absolute right-[12px] top-[76px] h-[58px] w-[58px] ${pressed.slam ? "pressed" : ""}`}
-          >
-            <Orbit size={24} />
-            <div ref={(r) => { ovRefs.current.slam = r; }} className="cd-sweep font-hud text-lg" />
-            {label("SLAM")}
-          </button>
-
-          {/* blast */}
-          <button
-            ref={(r) => { btnRefs.current.blast = r; }}
-            {...bind("blast")}
-            aria-label="Plasma blast"
-            className={`abtn absolute right-[8px] top-[8px] h-[62px] w-[62px] ${pressed.blast ? "pressed" : ""}`}
-          >
-            <Zap size={24} className="drop-shadow-[0_0_6px_rgba(255,210,63,0.7)]" />
-            <div ref={(r) => { ovRefs.current.blast = r; }} className="cd-sweep font-hud text-lg" />
-            {label("BLAST")}
-          </button>
-
-          {/* dash */}
-          <button
-            ref={(r) => { btnRefs.current.dash = r; }}
-            {...bind("dash")}
-            aria-label="Sonic dash"
-            className={`abtn absolute left-[4px] top-[132px] h-[56px] w-[56px] ${pressed.dash ? "pressed" : ""}`}
-          >
-            <Wind size={25} />
-            <div ref={(r) => { ovRefs.current.dash = r; }} className="cd-sweep font-hud text-lg" />
-            {label("DASH")}
-          </button>
-
-          {/* strike */}
-          <button
-            ref={(r) => { btnRefs.current.strike = r; strikeBtnRef.current = r; }}
-            {...bind("strike")}
-            aria-label="Power strike"
-            className={`abtn absolute right-[2px] bottom-[2px] h-[88px] w-[88px] ${pressed.strike ? "pressed" : ""}`}
-            style={{
-              background:
-                "radial-gradient(circle at 32% 26%, rgba(255,255,255,0.35), transparent 42%), linear-gradient(160deg, #ffd23f, #f7931e 65%, #d9432b)",
-              boxShadow:
-                "inset 0 0 0 2px rgba(255,255,255,0.4), inset 0 -10px 18px rgba(120,30,10,0.5), 0 8px 22px rgba(0,0,0,0.55), 0 0 24px rgba(255,160,50,0.35)",
-              color: "#2b1503",
+            className={`abtn absolute left-0 top-0 h-[46px] w-[46px] ${braceOn ? "pressed" : ""}`}
+            onPointerDown={(e) => {
+              e.preventDefault(); e.stopPropagation();
+              try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
+              touch.block = true; setBraceOn(true);
             }}
+            onPointerUp={() => { touch.block = false; setBraceOn(false); }}
+            onPointerCancel={() => { touch.block = false; setBraceOn(false); }}
+            onContextMenu={(e) => e.preventDefault()}
           >
-            <Hand size={34} strokeWidth={2.4} />
-            <div ref={(r) => { ovRefs.current.strike = r; }} className="cd-sweep font-hud text-xl" />
-            {label("STRIKE")}
-            {hint("J · HOLD = FLURRY")}
+            <Shield size={20} strokeWidth={2.6} />
+            <span className="pointer-events-none font-hud text-[7px] font-bold leading-none text-indigo-100/90">محافظ</span>
+          </button>
+          <button
+            aria-label="Overdrive"
+            className={`abtn absolute left-0 top-[56px] h-[50px] w-[50px] ${odOn ? "pressed" : ""}`}
+            onPointerDown={(e) => {
+              e.preventDefault(); e.stopPropagation();
+              try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
+              tap("over"); setOdOn(true);
+            }}
+            onPointerUp={() => setOdOn(false)}
+            onPointerCancel={() => setOdOn(false)}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            <BatteryCharging size={22} strokeWidth={2.6} />
+            <span className="pointer-events-none font-hud text-[7px] font-bold leading-none text-amber-100/90">اوج</span>
           </button>
         </div>
       </div>
 
-      {/* ================= PORTRAIT CLUSTER ================= */}
+      {/* ================= LANDSCAPE cluster (left) ================= */}
       <div
-        className="absolute right-2 bottom-[max(0.9rem,env(safe-area-inset-bottom))] z-20 hidden origin-bottom-right portrait:block"
-        style={{ touchAction: "none", transform: `scale(${scale})` }}
+        className="absolute left-2 bottom-[max(0.9rem,env(safe-area-inset-bottom))] z-20 origin-bottom-left portrait:hidden"
+        style={{ touchAction: "none", transform: `scale(${scale.l})` }}
         onContextMenu={(e) => e.preventDefault()}
       >
-        <div className="relative h-[430px] w-[218px]">
-          {/* right column (bottom → top): STRIKE, BLAST, DASH, UP, DOWN */}
+        <div className="relative h-[242px] w-[122px]">
+          {abilities.slice(0, 6).map((a, i) => (
+            <div key={a.id} className="absolute" style={{ left: 4 + (i % 2) * 62, top: 6 + Math.floor(i / 2) * 60 }}>
+              <AbilityBtn a={a} register={register} onHold={holdWrap} />
+            </div>
+          ))}
           <button
-            {...bind("up")}
-            aria-label="Ascend"
-            className={`abtn absolute right-[8px] top-[4px] h-[50px] w-[50px] ${pressed.up ? "pressed" : ""}`}
-          >
-            <ChevronUp size={24} strokeWidth={3} />
-            {label("UP")}
-          </button>
-          <button
-            {...bind("down")}
-            aria-label="Descend"
-            className={`abtn absolute right-[8px] top-[64px] h-[50px] w-[50px] ${pressed.down ? "pressed" : ""}`}
-          >
-            <ChevronDown size={24} strokeWidth={3} />
-            {label("DOWN")}
-          </button>
-          <button
-            ref={(r) => { btnRefs.current.dash = r; }}
-            {...bind("dash")}
-            aria-label="Sonic dash"
-            className={`abtn absolute right-[6px] top-[124px] h-[56px] w-[56px] ${pressed.dash ? "pressed" : ""}`}
-          >
-            <Wind size={24} />
-            <div ref={(r) => { ovRefs.current.dash = r; }} className="cd-sweep font-hud text-lg" />
-            {label("DASH")}
-          </button>
-          <button
-            ref={(r) => { btnRefs.current.blast = r; }}
-            {...bind("blast")}
-            aria-label="Plasma blast"
-            className={`abtn absolute right-[4px] top-[190px] h-[60px] w-[60px] ${pressed.blast ? "pressed" : ""}`}
-          >
-            <Zap size={24} className="drop-shadow-[0_0_6px_rgba(255,210,63,0.7)]" />
-            <div ref={(r) => { ovRefs.current.blast = r; }} className="cd-sweep font-hud text-lg" />
-            {label("BLAST")}
-          </button>
-          <button
-            ref={(r) => { btnRefs.current.strike = r; strikeBtnRef.current = r; }}
-            {...bind("strike")}
-            aria-label="Power strike"
-            className={`abtn absolute right-[2px] bottom-[2px] h-[88px] w-[88px] ${pressed.strike ? "pressed" : ""}`}
-            style={{
-              background:
-                "radial-gradient(circle at 32% 26%, rgba(255,255,255,0.35), transparent 42%), linear-gradient(160deg, #ffd23f, #f7931e 65%, #d9432b)",
-              boxShadow:
-                "inset 0 0 0 2px rgba(255,255,255,0.4), inset 0 -10px 18px rgba(120,30,10,0.5), 0 8px 22px rgba(0,0,0,0.55), 0 0 24px rgba(255,160,50,0.35)",
-              color: "#2b1503",
-            }}
-          >
-            <Hand size={36} strokeWidth={2.4} />
-            <div ref={(r) => { ovRefs.current.strike = r; }} className="cd-sweep font-hud text-xl" />
-            {label("STRIKE")}
-          </button>
-
-          {/* left column (bottom → top): SLAM, CYCLONE, GRAB, BOLT, VISION, RAGE, BRACE */}
-          <button
-            ref={(r) => { btnRefs.current.slam = r; }}
-            {...bind("slam")}
-            aria-label="Nova slam, pile-driver or ground stomp"
-            className={`abtn absolute left-[8px] top-[354px] h-[54px] w-[54px] ${pressed.slam ? "pressed" : ""}`}
-          >
-            <Orbit size={23} />
-            <div ref={(r) => { ovRefs.current.slam = r; }} className="cd-sweep font-hud text-lg" />
-            {label("SLAM")}
-          </button>
-          <button
-            ref={(r) => { btnRefs.current.cyclone = r; }}
-            {...bind("cyclone")}
-            aria-label="Cyclone spin"
-            className={`abtn absolute left-[8px] top-[294px] h-[52px] w-[52px] ${pressed.cyclone ? "pressed" : ""}`}
-          >
-            <Tornado size={23} className="text-amber-300" />
-            <div ref={(r) => { ovRefs.current.cyclone = r; }} className="cd-sweep font-hud text-lg" />
-            {label("CYCLONE")}
-          </button>
-          <button
-            {...bind("grab")}
-            aria-label="Grab or thunder clap"
-            className={`abtn absolute left-[8px] top-[236px] h-[48px] w-[48px] ${pressed.grab ? "pressed" : ""}`}
-          >
-            <Grab size={21} />
-            {label("GRAB")}
-          </button>
-          <button
-            ref={(r) => { btnRefs.current.bolt = r; }}
-            {...bind("bolt")}
-            aria-label="Thunder strike"
-            className={`abtn absolute left-[8px] top-[178px] h-[48px] w-[48px] ${pressed.bolt ? "pressed" : ""}`}
-          >
-            <CloudLightning size={22} className="text-sky-200" />
-            <div ref={(r) => { ovRefs.current.bolt = r; }} className="cd-sweep font-hud text-lg" />
-            {label("BOLT")}
-          </button>
-          <button
-            ref={(r) => { visionBtnRef.current = r; }}
-            {...bind("vision")}
-            aria-label="Atomic vision"
-            className={`abtn absolute left-[8px] top-[120px] h-[48px] w-[48px] ${pressed.vision ? "pressed" : ""}`}
-          >
-            <Eye size={22} className="text-orange-300" />
-            {label("VISION")}
-          </button>
-          <button
-            ref={odBtnRef}
-            {...bind("over")}
-            aria-label="Overdrive"
-            className={`abtn absolute left-[8px] top-[4px] h-[48px] w-[48px] transition-opacity ${pressed.over ? "pressed" : ""}`}
-            style={{ opacity: 0.4 }}
-          >
-            <div
-              ref={odRingRef}
-              className="absolute inset-[-3px] rounded-full"
-              style={{
-                padding: 3,
-                WebkitMask: "linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)",
-                WebkitMaskComposite: "xor",
-                maskComposite: "exclude",
-              }}
-            />
-            <Flame size={21} className="drop-shadow-[0_0_6px_rgba(255,150,40,0.8)]" />
-            {label("RAGE")}
-          </button>
-          <button
-            ref={blockBtnRef}
-            {...bind("block")}
             aria-label="Brace"
-            className={`abtn absolute left-[8px] top-[62px] h-[48px] w-[48px] transition-all ${pressed.brace ? "pressed" : ""}`}
+            className={`abtn absolute left-[4px] top-[186px] h-[46px] w-[46px] ${braceOn ? "pressed" : ""}`}
+            onPointerDown={(e) => {
+              e.preventDefault(); e.stopPropagation();
+              try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
+              touch.block = true; setBraceOn(true);
+            }}
+            onPointerUp={() => { touch.block = false; setBraceOn(false); }}
+            onPointerCancel={() => { touch.block = false; setBraceOn(false); }}
+            onContextMenu={(e) => e.preventDefault()}
           >
-            <Shield size={22} className="text-sky-300" />
-            {label("BRACE")}
+            <Shield size={20} strokeWidth={2.6} />
+            <span className="pointer-events-none font-hud text-[7px] font-bold leading-none text-indigo-100/90">محافظ</span>
+          </button>
+          <button
+            aria-label="Overdrive"
+            className={`abtn absolute left-[62px] top-[182px] h-[50px] w-[50px] ${odOn ? "pressed" : ""}`}
+            onPointerDown={(e) => {
+              e.preventDefault(); e.stopPropagation();
+              try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
+              tap("over"); setOdOn(true);
+            }}
+            onPointerUp={() => setOdOn(false)}
+            onPointerCancel={() => setOdOn(false)}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            <BatteryCharging size={22} strokeWidth={2.6} />
+            <span className="pointer-events-none font-hud text-[7px] font-bold leading-none text-amber-100/90">اوج</span>
           </button>
         </div>
       </div>

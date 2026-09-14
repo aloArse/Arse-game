@@ -217,3 +217,164 @@ canvas { display: block; }
 }
 
 .text-shadow { text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8); }
+
+/* ================= v5: panels · minimap · zone ================= */
+
+@keyframes zonePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 70, 90, 0); }
+  50% { box-shadow: 0 0 18px 2px rgba(255, 70, 90, 0.45); }
+}
+
+/* ---------- panel shell ---------- */
+.panel-backdrop {
+  background: rgba(4, 6, 16, 0.6);
+  backdrop-filter: blur(10px) saturate(1.2);
+  animation: fadeIn 0.25s ease both;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.panel-shell {
+  border-radius: 18px;
+  background: linear-gradient(160deg, rgba(18, 24, 48, 0.92), rgba(10, 13, 30, 0.95));
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  animation: panelIn 0.38s cubic-bezier(0.16, 1.2, 0.3, 1) both;
+  isolation: isolate;
+}
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(34px) scale(0.94); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.panel-aurora {
+  position: absolute; inset: -2px; border-radius: 20px; z-index: -1;
+  background: conic-gradient(from var(--ang, 0deg),
+    transparent 0deg, var(--accent, #7aa8ff) 70deg, transparent 140deg,
+    transparent 180deg, var(--accent, #7aa8ff) 250deg, transparent 320deg);
+  filter: blur(10px); opacity: 0.55;
+  animation: auroraSpin 5s linear infinite;
+}
+@property --ang { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@keyframes auroraSpin { to { --ang: 360deg; } }
+.panel-close {
+  margin-inline-start: auto;
+  display: grid; place-items: center;
+  height: 32px; width: 32px; border-radius: 10px;
+  background: rgba(255, 255, 255, 0.07); color: #cdd6f4;
+  transition: all 0.15s;
+}
+.panel-close:active { transform: scale(0.88); background: rgba(255, 90, 110, 0.25); }
+.panel-btn {
+  border-radius: 12px; padding: 11px 14px;
+  background: linear-gradient(120deg, #2a5fe0, #4f8dff);
+  color: white; font-weight: 800; letter-spacing: 0.04em;
+  box-shadow: 0 8px 24px rgba(60, 110, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  transition: transform 0.12s, box-shadow 0.2s;
+}
+.panel-btn:active { transform: scale(0.96); }
+
+/* ---------- abilities panel ---------- */
+.slot-chip {
+  aspect-ratio: 1; border-radius: 12px; display: grid; place-items: center;
+  background: rgba(255, 255, 255, 0.04); color: rgba(255, 255, 255, 0.35);
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+}
+.slot-chip.slot-filled {
+  color: #bfe4ff;
+  background: linear-gradient(150deg, rgba(42, 95, 224, 0.35), rgba(20, 40, 90, 0.5));
+  border: 1px solid rgba(122, 224, 255, 0.4);
+  box-shadow: 0 0 14px rgba(60, 160, 255, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+.ability-card {
+  position: relative; text-align: right; border-radius: 14px; padding: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: all 0.16s cubic-bezier(0.2, 1.4, 0.4, 1);
+  animation: riseIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.ability-card:active { transform: scale(0.96); }
+.ability-card.ability-on {
+  background: linear-gradient(150deg, rgba(30, 70, 160, 0.4), rgba(12, 26, 60, 0.6));
+  border-color: rgba(122, 224, 255, 0.55);
+  box-shadow: 0 0 20px rgba(70, 170, 255, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+.ability-icon {
+  display: grid; place-items: center; height: 30px; width: 30px; border-radius: 9px;
+  background: rgba(122, 224, 255, 0.12); color: #9fd8ff;
+  border: 1px solid rgba(122, 224, 255, 0.25);
+}
+
+/* ---------- skins panel ---------- */
+.skin-card {
+  position: relative; border-radius: 14px; padding: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: all 0.16s cubic-bezier(0.2, 1.4, 0.4, 1);
+  animation: riseIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.skin-card:active { transform: scale(0.96); }
+.skin-card.skin-on {
+  background: linear-gradient(150deg, rgba(160, 40, 120, 0.3), rgba(60, 16, 60, 0.55));
+  border-color: rgba(255, 159, 208, 0.6);
+  box-shadow: 0 0 22px rgba(255, 120, 200, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+.swatch {
+  height: 18px; width: 18px; border-radius: 9999px; display: inline-block;
+  box-shadow: inset 0 -3px 6px rgba(0, 0, 0, 0.4), inset 0 2px 3px rgba(255, 255, 255, 0.35),
+    0 0 10px rgba(255, 255, 255, 0.12);
+}
+.skin-badge {
+  position: absolute; top: 8px; left: 8px;
+  font-size: 8px; font-weight: 800; letter-spacing: 0.08em;
+  padding: 3px 7px; border-radius: 9999px;
+  background: rgba(52, 211, 153, 0.2); color: #6ee7b7;
+  border: 1px solid rgba(110, 231, 183, 0.4);
+}
+
+/* ---------- settings panel ---------- */
+.set-row { margin-bottom: 10px; }
+.set-slider {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 22px; background: transparent; direction: ltr;
+}
+.set-slider::-webkit-slider-runnable-track {
+  height: 7px; border-radius: 9999px;
+  background: linear-gradient(90deg, #2a5fe0 var(--fill, 50%), rgba(255, 255, 255, 0.1) var(--fill, 50%));
+}
+.set-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  height: 19px; width: 19px; margin-top: -6px; border-radius: 9999px;
+  background: linear-gradient(140deg, #cfe4ff, #7aa8ff);
+  box-shadow: 0 0 12px rgba(110, 170, 255, 0.6), 0 2px 5px rgba(0, 0, 0, 0.5);
+}
+.set-slider::-moz-range-track {
+  height: 7px; border-radius: 9999px;
+  background: linear-gradient(90deg, #2a5fe0 var(--fill, 50%), rgba(255, 255, 255, 0.1) var(--fill, 50%));
+}
+.set-slider::-moz-range-thumb {
+  height: 17px; width: 17px; border: none; border-radius: 9999px;
+  background: #9fc4ff; box-shadow: 0 0 10px rgba(110, 170, 255, 0.6);
+}
+.quality-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  border-radius: 11px; padding: 9px 6px; color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  transition: all 0.15s;
+}
+.quality-btn.quality-on {
+  color: #d5ffe4;
+  background: linear-gradient(140deg, rgba(30, 120, 80, 0.4), rgba(12, 50, 40, 0.6));
+  border-color: rgba(110, 231, 183, 0.55);
+  box-shadow: 0 0 16px rgba(52, 211, 153, 0.25);
+}
+
+/* ---------- minimap ---------- */
+.minimap-wrap {
+  position: relative; border-radius: 14px; overflow: hidden;
+  border: 1px solid rgba(140, 170, 255, 0.28);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55), 0 0 18px rgba(70, 130, 255, 0.15),
+    inset 0 0 24px rgba(20, 40, 100, 0.4);
+}
+.minimap-scan {
+  position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(160, 200, 255, 0.03) 3px 4px);
+  mix-blend-mode: screen;
+}

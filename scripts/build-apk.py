@@ -32,8 +32,8 @@ from cryptography.x509.oid import NameOID
 
 PKG = "com.aloarse.arsegame"
 APP_LABEL = "آرس"
-VERSION_CODE = 5
-VERSION_NAME = "4.1"
+VERSION_CODE = 6
+VERSION_NAME = "5.0"
 MIN_SDK = 21
 TARGET_SDK = 29  # forgiving: no R+ resources.arsc rules, no edge-to-edge enforcement
 SPLASH_BG = "#060A1A"
@@ -260,10 +260,20 @@ def build_manifest():
 
 # ------------------------------------------------------------- signing ----
 def get_key_cert():
-    if os.path.exists(KEY_PATH) and os.path.exists(CERT_PATH):
-        key = serialization.load_pem_private_key(open(KEY_PATH, "rb").read(), None)
-        cert = x509.load_pem_x509_certificate(open(CERT_PATH, "rb").read())
-        return key, cert
+    """Signing key: repo .signkey/ first (survives sandbox resets), then the
+    home paths. If none exist, generate a fresh self-signed pair and store it
+    in BOTH places. NOTE: a fresh pair means Android will refuse an in-place
+    update over an older install (signature mismatch) — uninstall first."""
+    repo_key = os.path.join(os.path.dirname(__file__), "..", ".signkey")
+    os.makedirs(repo_key, exist_ok=True)
+    for kp, cp in (
+        (os.path.join(repo_key, "apkkey.pem"), os.path.join(repo_key, "apkcert.pem")),
+        (KEY_PATH, CERT_PATH),
+    ):
+        if os.path.exists(kp) and os.path.exists(cp):
+            key = serialization.load_pem_private_key(open(kp, "rb").read(), None)
+            cert = x509.load_pem_x509_certificate(open(cp, "rb").read())
+            return key, cert
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Arse Game")])
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -277,11 +287,20 @@ def get_key_cert():
         .not_valid_after(now + datetime.timedelta(days=365 * 30))
         .sign(key, hashes.SHA256())
     )
-    open(KEY_PATH, "wb").write(key.private_bytes(
+    pem_key = key.private_bytes(
         serialization.Encoding.PEM,
         serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption()))
-    open(CERT_PATH, "wb").write(cert.public_bytes(serialization.Encoding.PEM))
+        serialization.NoEncryption())
+    pem_cert = cert.public_bytes(serialization.Encoding.PEM)
+    for kp, cp in (
+        (os.path.join(repo_key, "apkkey.pem"), os.path.join(repo_key, "apkcert.pem")),
+        (KEY_PATH, CERT_PATH),
+    ):
+        try:
+            open(kp, "wb").write(pem_key)
+            open(cp, "wb").write(pem_cert)
+        except OSError:
+            pass  # home dir may not be writable
     return key, cert
 
 
@@ -381,13 +400,19 @@ def v2_block(apk_without_block: bytes, key, cert) -> bytes:
 
 
 def load_template_dex():
-    """classes.dex from inside the nitron template APK (NOT the apk itself!).
+    """classes.dex from the nitron WebView shell template.
 
+    Sources, in order: /tmp nitron template zip, then the raw copy committed
+    at scripts/nitron-classes.dex (survives sandbox resets).
     A previous build accidentally embedded the whole base.apk zip as
     classes.dex -> 'App not installed' on device. Guard with magic checks.
     """
-    with zipfile.ZipFile(DEX_PATH) as z:
-        dex = z.read("classes.dex")
+    if os.path.exists(DEX_PATH):
+        with zipfile.ZipFile(DEX_PATH) as z:
+            dex = z.read("classes.dex")
+    else:
+        repo_dex = os.path.join(os.path.dirname(__file__), "nitron-classes.dex")
+        dex = open(repo_dex, "rb").read()
     assert dex[:4] == b"dex\n", f"template classes.dex is not a dex: {dex[:8]!r}"
     import zlib
     hdr = struct.unpack("<II", dex[32:40])

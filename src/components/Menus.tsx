@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   Play, Volume2, VolumeX, X, Home, RotateCcw, Hand, Zap, Wind, Orbit, Flame,
   Move, Shield, Trophy, Skull, Target, Timer, HelpCircle, Building2, ChevronsUpDown, Grab,
+  Rocket, Shirt as Shirt2, Swords as Swords2,
 } from "lucide-react";
 import type { RunStats } from "../game/types";
 
@@ -185,18 +186,28 @@ export function HowTo({ onClose }: { onClose: () => void }) {
             desc="Fill the meter by fighting. Unleash for 8s of ×2 damage, more speed, twin bolts, bigger slams and halved incoming damage." />
           <Row icon={<Building2 size={20} />} keyCap="COLLATERAL" title="STRUCTURAL COLLAPSE"
             desc="Towers are stacks of individual floors that scorch and weaken under fire. Shear floors off and watch them fracture into concrete, rebar and glass — push a frame past critical and it groans, tilts, and pancakes floor-by-floor, leaving fires burning in the rubble." />
-          <Row icon={<Flame size={20} />} keyCap="GROWTH" title="VILTRUMITE AGING"
-            desc="Mark grows stronger with age. Every wave you clear ages him a year (+3 for a warlord): permanent +damage, +speed, +health and faster cooldowns — and your age is SAVED between runs. Fight on, grow on." />
+          <Row icon={<Flame size={20} />} keyCap="EVERY 30s" title="VILTRUMITE AGING"
+            desc="Mark grows stronger with age — AUTOMATICALLY. Every 30 seconds he ages one year: permanent +damage, +speed, +health and faster cooldowns, and your age is SAVED between runs. No wave required — fight on, grow on." />
           <Row icon={<Skull size={20} />} keyCap="WARLORDS" title="THREE BOSS FIGHTS"
             desc="Every 5th wave a named warlord hunts you — proactively, wherever you are: KURGAN THE SLEDGE chains rush-punches and ground slams; THRAXA THE BLADE orbit-strafes and blink-slashes in violet streaks; LORD CONQUEST bombards, summons drones and calls judgement strikes on your position (watch the ground rings). Each enrages below 40% health." />
-          <Row icon={<Move size={20} />} keyCap="LAND / WALK" title="GROUND MODE"
-            desc="Dive toward the street or a rooftop and touch down — Mark lands, then walks and SPRINTS on foot with a full run cycle. Press UP to launch back into the sky. On the ground, SLAM becomes a SEISMIC STOMP shockwave." />
+          <Row icon={<Move size={20} />} keyCap="R-STICK" title="FLIGHT STICK & GROUND MODE"
+            desc="The RIGHT side of the screen is a second stick: push UP/DOWN to climb and dive, LEFT/RIGHT to strafe — modern twin-stick flying. Dive to a street or rooftop to land, then walk and SPRINT with the left stick; flick the right stick UP to launch. On the ground, SLAM becomes a SEISMIC STOMP." />
           <Row icon={<Flame size={20} />} keyCap="V (HOLD)" title="ATOMIC VISION"
             desc="Hold to fire a searing beam from the eyes. It melts a crater exactly where it touches — carve lines through towers and burn enemies. Drains energy while active." />
           <Row icon={<Zap size={20} />} keyCap="T" title="THUNDER STRIKE"
             desc="Call forked lightning down on whatever you're aiming at. Instant heavy damage, a shockwave ring, and a scorched crater — works on enemies and buildings alike." />
           <Row icon={<Hand size={20} />} keyCap="J ×4" title="SPIN BACKFIST"
             desc="The strike chain now has a fourth hit: jab → cross → launching UPPERCUT → a whirling 360° BACKFIST that scatters everything around you." />
+          <Row icon={<Swords2 size={20} />} keyCap="⚔ PANEL" title="ABILITY LOADOUT"
+            desc="12 abilities, 6 slots — open the SWORD panel (top-right) to swap your loadout any time: meteor call, chain lightning, force bubble, homing missiles and more, each with spectacular effects." />
+          <Row icon={<Rocket size={20} />} keyCap="↑↑↑" title="SPACE & PLANETS"
+            desc="Fly straight up through the clouds — past ~1250m the sky falls away to stars. Four planets orbit overhead: land on the red desert, the ringed giant, the ice world or the green world — then dive back to Earth." />
+          <Row icon={<Building2 size={20} />} keyCap="20s" title="CITY RECONSTRUCTION"
+            desc="Destroyed towers don't stay gone: holographic construction beams rise over the rubble and after 20 seconds the tower rebuilds floor-by-floor. The fight never runs out of skyline." />
+          <Row icon={<Building2 size={20} />} keyCap="ARENA" title="BATTLE ZONE"
+            desc="Enemies only spawn and fight inside the central plaza — marked red on the minimap. Leave the zone and nothing hunts you. Waves, warlords and all combat happen in the arena." />
+          <Row icon={<Shirt2 size={20} />} keyCap="SKINS" title="HERO SKINS"
+            desc="Six skins — Classic, Omni-Man, Midnight armor, Solar, Viltrumite and Nova. Open the SHIRT panel (top-right) to switch instantly with a transformation shimmer." />
           <Row icon={<Building2 size={20} />} keyCap="PRECISION" title="POINT-OF-IMPACT DAMAGE"
             desc="Punches, vision beams and lightning now destroy ONLY the exact point of contact — punch clean holes through walls, carve towers letter-by-letter. A building only falls when it's actually critically damaged: then it groans, sags and pancakes floor-by-floor under real gravity." />
           <Row icon={<Shield size={20} />} keyCap="SURVIVE" title="THE ARMADA"

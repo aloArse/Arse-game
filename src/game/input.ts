@@ -1,8 +1,9 @@
 // ---------- Unified input: keyboard + touch joystick + buttons (3D) ----------
 
-export type TapName = "strike" | "dash" | "slam" | "cyclone" | "over" | "grab" | "bolt" | "pause";
+export type TapName = "strike" | "dash" | "slam" | "cyclone" | "over" | "grab" | "bolt" | "pause"
+  | "meteor" | "chain" | "bubble" | "missile";
 
-const taps: Record<TapName, number> = { strike: 0, dash: 0, slam: 0, cyclone: 0, over: 0, grab: 0, bolt: 0, pause: 0 };
+const taps: Record<TapName, number> = { strike: 0, dash: 0, slam: 0, cyclone: 0, over: 0, grab: 0, bolt: 0, pause: 0, meteor: 0, chain: 0, bubble: 0, missile: 0 };
 
 /** held buttons (keyboard) */
 export const hold = { blast: false, strike: false, up: false, down: false, block: false, vision: false };
@@ -15,6 +16,9 @@ export const kb = { x: 0, y: 0 };
 
 /** analog joystick (screen space: y+ = down/back) */
 export const pad = { x: 0, y: 0, mag: 0, active: false };
+
+/** right flight stick (y+ = descend) */
+export const pad2 = { x: 0, y: 0, mag: 0, active: false };
 
 export function tap(n: TapName): void { taps[n] += 1; }
 
@@ -29,6 +33,7 @@ export function clearAll(): void {
   touch.up = false; touch.down = false; touch.blast = false; touch.strike = false; touch.block = false; touch.vision = false;
   kb.x = 0; kb.y = 0;
   pad.x = 0; pad.y = 0; pad.mag = 0; pad.active = false;
+  pad2.x = 0; pad2.y = 0; pad2.mag = 0; pad2.active = false;
   for (const k in keys) delete keys[k];
 }
 
@@ -57,11 +62,23 @@ export function moveAxis(): { x: number; y: number; mag: number } {
   return { x, y: -y, mag: Math.min(1, l) };
 }
 
-/** vertical thrust: +1 up, -1 down */
+/** vertical thrust: +1 up, -1 down (flight stick overrides buttons) */
 export function vertAxis(): number {
+  if (pad2.active && pad2.mag > 0.14) {
+    // screen y+ = down → thrust down
+    const t = -(pad2.y);
+    return Math.abs(t) < 0.14 ? 0 : Math.sign(t) * Math.min(1, (Math.abs(t) - 0.14) / 0.72);
+  }
   const up = hold.up || touch.up;
   const down = hold.down || touch.down;
   return (up ? 1 : 0) - (down ? 1 : 0);
+}
+
+/** lateral thrust from the flight stick: -1 left … +1 right (camera-relative) */
+export function strafeAxis(): number {
+  if (!pad2.active || pad2.mag <= 0.14) return 0;
+  const t = pad2.x;
+  return Math.abs(t) < 0.14 ? 0 : Math.sign(t) * Math.min(1, (Math.abs(t) - 0.14) / 0.72);
 }
 
 /** true if strike is held on either device */

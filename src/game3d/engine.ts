@@ -1,12 +1,17 @@
 // ==================== INVINCIBLE — Sky Guardian · 3D engine ====================
 import * as THREE from "three";
 import { FX, Trail } from "./fx";
-import { City, CITY_HALF } from "./city";
-import { Rig, POSES, HERO_PAL } from "./character";
+import { City, CITY_HALF, ZONE_R } from "./city";
+import { Rig, POSES, skinById } from "./character";
 import { Enemies, BOSS_TYPES, type EKind, type Enemy } from "./enemies";
 import { audio } from "../game/audio";
-import { installKeyboard, moveAxis, vertAxis, holdStrike, holdBlast, holdBlock, holdVision, take, clearAll } from "../game/input";
+import { installKeyboard, moveAxis, vertAxis, strafeAxis, holdStrike, holdBlast, holdBlock, holdVision, take, clearAll } from "../game/input";
+import { ABILITIES, abilityById } from "../game/abilities";
+import { settings, qualityProfile } from "../game/settings";
 import { makeHud, type HudState, type RunStats } from "../game/types";
+import { Weather } from "./weather";
+import { SpaceLayer } from "./space";
+import { Traffic } from "./traffic";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
@@ -22,8 +27,12 @@ function lerpAngle(a: number, b: number, t: number): number {
 }
 
 const CD_STRIKE = 0.36, CD_BLAST = 0.16, CD_DASH = 2.2, CD_SLAM = 6.5, CD_CYCLONE = 5.5, CD_BOLT = 9;
-const EN_BLAST = 4, EN_DASH = 12, EN_SLAM = 32, EN_CYCLONE = 18;
-const MAX_ALT = 430;
+const CD_METEOR = 14, CD_CHAIN = 11, CD_BUBBLE = 18, CD_MISSILE = 12;
+const EN_BLAST = 4, EN_DASH = 12, EN_SLAM = 32, EN_CYCLONE = 18, EN_METEOR = 30, EN_CHAIN = 16, EN_BUBBLE = 26, EN_MISSILE = 22;
+/** space begins fading in above this altitude */
+const SPACE_ALT = 1250;
+/** the battle zone: central plaza */
+const ZONE = new THREE.Vector3(0, 0, 0);
 const UP_AXIS = new THREE.Vector3(0, 1, 0);
 const BOUND = CITY_HALF + 150;
 
@@ -59,16 +68,46 @@ interface Hooks {
   onFatal?: (message: string) => void;
 }
 
+/** scripted meteor strike */
+interface Meteor {
+  active: boolean;
+  t: number;             // 0..1 descent progress
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  mesh: THREE.Mesh;
+}
+
+/** homing missile */
+interface Missile {
+  active: boolean;
+  mesh: THREE.Group;
+  v: THREE.Vector3;
+  target: Enemy | null;
+  life: number;
+}
+
 export class Engine {
   // --- three ---
   renderer: THREE.WebGLRenderer;
   scene = new THREE.Scene();
   camera: THREE.PerspectiveCamera;
-  private sky!: THREE.Mesh;
   private sunLight!: THREE.DirectionalLight;
+  private hemiLight!: THREE.HemisphereLight;
   private heroLight!: THREE.PointLight;
   private shield!: THREE.Mesh;
-  private clouds: (THREE.Mesh | THREE.Sprite)[] = [];
+  weather!: Weather;
+  space!: SpaceLayer;
+  traffic!: Traffic;
+  private meteors: Meteor[] = [];
+  private missiles: Missile[] = [];
+  private bubbleMesh!: THREE.Mesh;
+  private bubbleT = 0;
+  private spaceMode = false;
+  private ageT = 0;                 // 30s → +1 year
+  private activeSkin = "classic";
+  loadout: string[] = [...settings.get().loadout];
+  private shakeEnabled = true;
+  private bubblePulse = 0;
 
   // --- systems ---
   fx: FX;
@@ -113,7 +152,7 @@ export class Engine {
   private cycloneT = 0; private cycloneHitT = 0; private cycloneSpin = 0;
   private blockT = 0;
   private flurryOn = false;
-  private cd = { strike: 0, blast: 0, dash: 0, slam: 0, cyclone: 0, bolt: 0 };
+  private cd: Record<string, number> = { strike: 0, blast: 0, dash: 0, slam: 0, cyclone: 0, bolt: 0, meteor: 0, chain: 0, bubble: 0, missile: 0 };
   private heroDead = false; private deadT = 0;
 
   // camera rig
@@ -158,6 +197,7 @@ export class Engine {
 
   // scratch
   private _v = new THREE.Vector3();
+  private _in = new THREE.Vector3(); // movement input — NEVER used as scratch by abilities
   private _v2 = new THREE.Vector3();
   private _v3 = new THREE.Vector3();
   private _push = new THREE.Vector3();
@@ -194,11 +234,18 @@ export class Engine {
 
     this.scene.fog = new THREE.FogExp2(0x5a4a72, 0.0017);
 
-    this.buildSky();
+    const qp = qualityProfile(settings.get().quality);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, qp.pixelRatio));
+    this.shakeEnabled = settings.get().shake;
+
     this.buildLights();
+    this.weather = new Weather(this.scene, qp.clouds);
+    this.space = new SpaceLayer(this.scene, qp.clouds);
+    this.traffic = new Traffic(this.scene, CITY_HALF, 78, qp.traffic);
 
     this.fx = new FX(this.scene);
     this.city = new City(this.scene);
+    this.city.onRebuild = (b) => this.onCityRebuild(b);
     this.enemies = new Enemies(this.scene);
 
     // cinematic bloom pipeline (auto-disables on weak GPUs)
@@ -217,11 +264,17 @@ export class Engine {
     this.fistTrailL = new Trail(this.scene, 11, 0xffe9b0, 0.34);
     this.fistTrailR = new Trail(this.scene, 11, 0xffe9b0, 0.34);
 
-    this.rig = new Rig(HERO_PAL, 1);
+    this.activeSkin = settings.get().skin;
+    this.rig = new Rig(skinById(this.activeSkin).pal, 1);
     this.scene.add(this.rig.group);
 
     this.buildShield();
     this.buildPools();
+
+    {
+      const st = settings.get();
+      audio.setVolumes({ master: st.master, sfx: st.sfx, music: st.music });
+    }
 
     canvas.addEventListener("webglcontextlost", this.onContextLost, false);
     canvas.addEventListener("webglcontextrestored", this.onContextRestored, false);
@@ -232,183 +285,9 @@ export class Engine {
 
   /* ---------------- setup ---------------- */
 
-  private buildSky(): void {
-    const sunDir = new THREE.Vector3(-0.55, 0.17, -0.82).normalize();
-    const mat = new THREE.ShaderMaterial({
-      side: THREE.BackSide,
-      depthWrite: false,
-      fog: false,
-      uniforms: {
-        top: { value: new THREE.Color(0x141a44) },
-        mid: { value: new THREE.Color(0x6b4f8e) },
-        bot: { value: new THREE.Color(0xff9a5a) },
-        sunDir: { value: sunDir },
-        sunCol: { value: new THREE.Color(0xffd9a0) },
-      },
-      vertexShader: /* glsl */ `
-        varying vec3 vW;
-        void main() {
-          vW = (modelMatrix * vec4(position, 1.0)).xyz - cameraPosition;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: /* glsl */ `
-        uniform vec3 top; uniform vec3 mid; uniform vec3 bot;
-        uniform vec3 sunDir; uniform vec3 sunCol;
-        varying vec3 vW;
-        float hash(vec2 p) {
-          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-        }
-        void main() {
-          vec3 d = normalize(vW);
-          float h = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
-          vec3 c = mix(bot, mid, smoothstep(0.42, 0.56, h));
-          c = mix(c, top, smoothstep(0.54, 0.96, h));
-          // horizon haze band — city glow trapped in the smog layer
-          float haze = exp(-abs(d.y) * 9.0);
-          c += vec3(0.34, 0.16, 0.10) * haze * 0.55;
-          // sun: disc + tight corona + wide glow + warm scatter
-          float s = max(0.0, dot(d, normalize(sunDir)));
-          c += sunCol * smoothstep(0.9992, 0.9997, s) * 5.0;
-          c += sunCol * pow(s, 340.0) * 3.4;
-          c += sunCol * pow(s, 22.0) * 0.55;
-          c += sunCol * pow(s, 7.0) * 0.30;
-          c += vec3(0.9, 0.5, 0.35) * pow(s, 2.0) * 0.13;
-          // stars, faint near the horizon and bright at the zenith
-          float zen = smoothstep(0.35, 0.9, d.y);
-          vec2 sp = d.xz / max(0.08, d.y + 0.35) * 46.0;
-          vec2 cell = floor(sp);
-          float star = step(0.9975, hash(cell));
-          float tw = 0.6 + 0.4 * hash(cell + 7.0);
-          c += vec3(0.9, 0.94, 1.0) * star * tw * zen * (0.55 + 0.45 * pow(s, 3.0) * -1.0 + 0.45);
-          gl_FragColor = vec4(c, 1.0);
-        }
-      `,
-    });
-    this.sky = new THREE.Mesh(new THREE.SphereGeometry(2600, 32, 20), mat);
-    this.sky.frustumCulled = false;
-    this.scene.add(this.sky);
-
-    // three scrolling cloud decks at different altitudes/speeds
-    const tex = this.cloudTexture();
-    for (let i = 0; i < 3; i++) {
-      const m = new THREE.Mesh(
-        new THREE.PlaneGeometry(4400, 4400),
-        new THREE.MeshBasicMaterial({
-          map: tex.clone(), transparent: true, opacity: [0.55, 0.38, 0.24][i],
-          depthWrite: false, fog: false, side: THREE.DoubleSide,
-        }),
-      );
-      (m.material as THREE.MeshBasicMaterial).map!.wrapS = (m.material as THREE.MeshBasicMaterial).map!.wrapT = THREE.RepeatWrapping;
-      (m.material as THREE.MeshBasicMaterial).map!.repeat.set(2 + i, 2 + i);
-      (m.material as THREE.MeshBasicMaterial).map!.needsUpdate = true;
-      m.rotation.x = -Math.PI / 2;
-      m.rotation.z = i * 1.9;
-      m.position.y = [300, 392, 520][i];
-      m.renderOrder = -1;
-      this.clouds.push(m);
-      this.scene.add(m);
-    }
-    // volumetric-feel cloud banks dotted around the skyline (camera-facing sprites)
-    const bankMat = (op: number) => new THREE.SpriteMaterial({
-      map: tex, transparent: true, opacity: op, depthWrite: false, fog: false,
-      color: 0xf4ecff,
-    });
-    for (let i = 0; i < 14; i++) {
-      const s = new THREE.Sprite(bankMat(0.26 + Math.random() * 0.18));
-      const a = (i / 14) * Math.PI * 2 + Math.random() * 0.5;
-      const r = 700 + Math.random() * 1100;
-      s.position.set(Math.cos(a) * r, 210 + Math.random() * 230, Math.sin(a) * r);
-      const sc = 380 + Math.random() * 420;
-      s.scale.set(sc, sc * (0.36 + Math.random() * 0.2), 1);
-      s.renderOrder = -1;
-      this.clouds.push(s);
-      this.scene.add(s);
-    }
-    // sun glow sprite on the light direction
-    const sunMat = new THREE.SpriteMaterial({
-      transparent: true, opacity: 0.9, depthWrite: false, fog: false,
-      color: 0xffd9a0,
-    });
-    // radial glow canvas
-    {
-      const c = document.createElement("canvas");
-      c.width = c.height = 128;
-      const g2 = c.getContext("2d")!;
-      const grd = g2.createRadialGradient(64, 64, 0, 64, 64, 64);
-      grd.addColorStop(0, "rgba(255,255,255,1)");
-      grd.addColorStop(0.18, "rgba(255,235,200,0.75)");
-      grd.addColorStop(0.5, "rgba(255,200,140,0.22)");
-      grd.addColorStop(1, "rgba(255,180,120,0)");
-      g2.fillStyle = grd;
-      g2.fillRect(0, 0, 128, 128);
-      const st = new THREE.CanvasTexture(c);
-      st.colorSpace = THREE.SRGBColorSpace;
-      sunMat.map = st;
-    }
-    const sun = new THREE.Sprite(sunMat);
-    sun.position.copy(sunDir).multiplyScalar(2200);
-    sun.scale.set(900, 900, 1);
-    sun.renderOrder = -1;
-    this.clouds.push(sun);
-    this.scene.add(sun);
-  }
-
-  private cloudTexture(): THREE.CanvasTexture {
-    // layered puff clusters: bright cores, warm undersides, wispy fringes
-    const c = document.createElement("canvas");
-    c.width = c.height = 1024;
-    const g = c.getContext("2d")!;
-    g.clearRect(0, 0, 1024, 1024);
-    const puff = (x: number, y: number, r: number, core: string, mid: string) => {
-      const grd = g.createRadialGradient(x, y - r * 0.12, r * 0.05, x, y, r);
-      grd.addColorStop(0, core);
-      grd.addColorStop(0.45, mid);
-      grd.addColorStop(1, "rgba(255,255,255,0)");
-      g.fillStyle = grd;
-      g.beginPath();
-      g.arc(x, y, r, 0, Math.PI * 2);
-      g.fill();
-    };
-    // 26 big cloud banks, each a cluster of 5-9 puffs
-    for (let i = 0; i < 26; i++) {
-      const bx = Math.random() * 1024;
-      const by = Math.random() * 1024;
-      const scale = 46 + Math.random() * 90;
-      const warm = Math.random() > 0.45;
-      const core = warm ? "rgba(255,222,195,0.55)" : "rgba(226,222,248,0.5)";
-      const mid = warm ? "rgba(238,180,160,0.2)" : "rgba(178,174,222,0.16)";
-      const n = 5 + (Math.random() * 5 | 0);
-      for (let p = 0; p < n; p++) {
-        const a = Math.random() * Math.PI * 2;
-        const d = Math.random() * scale * 1.15;
-        puff(bx + Math.cos(a) * d, by + Math.sin(a) * d * 0.6, scale * (0.35 + Math.random() * 0.6), core, mid);
-      }
-      // top highlight
-      puff(bx, by - scale * 0.4, scale * 0.5, "rgba(255,255,255,0.34)", "rgba(255,240,230,0.1)");
-    }
-    // thin cirrus streaks
-    g.globalAlpha = 0.12;
-    for (let i = 0; i < 22; i++) {
-      const y = Math.random() * 1024;
-      g.strokeStyle = Math.random() > 0.5 ? "#ffe9d8" : "#d8d4f2";
-      g.lineWidth = 2 + Math.random() * 5;
-      g.beginPath();
-      const x0 = Math.random() * 1024;
-      g.moveTo(x0, y);
-      g.bezierCurveTo(x0 + 90, y - 14, x0 + 200, y + 12, x0 + 320 + Math.random() * 200, y - 6);
-      g.stroke();
-    }
-    g.globalAlpha = 1;
-    const t = new THREE.CanvasTexture(c);
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.repeat.set(3, 3);
-    t.colorSpace = THREE.SRGBColorSpace;
-    return t;
-  }
-
   private buildLights(): void {
     const hemi = new THREE.HemisphereLight(0xffd9b0, 0x2a2740, 1.15);
+    this.hemiLight = hemi;
     this.scene.add(hemi);
 
     this.sunLight = new THREE.DirectionalLight(0xffc58a, 2.5);
@@ -579,7 +458,7 @@ export class Engine {
     this.dashT = 0; this.dashId = 0;
     this.cycloneT = 0; this.cycloneHitT = 0; this.cycloneSpin = 0;
     this.blockT = 0; this.flurryOn = false;
-    this.cd = { strike: 0, blast: 0, dash: 0, slam: 0, cyclone: 0, bolt: 0 };
+    this.cd = { strike: 0, blast: 0, dash: 0, slam: 0, cyclone: 0, bolt: 0, meteor: 0, chain: 0, bubble: 0, missile: 0 };
     this.heroDead = false; this.deadT = 0;
     this.rig.group.visible = true;
     this.rig.setPoseImmediate(POSES.hover);
@@ -623,7 +502,7 @@ export class Engine {
 
         this.city.update(dt, this.fx);
         this.fx.update(dt, this.camera);
-        this.updateSkyAndClouds(raw);
+        this.updateEnvironment(raw);
       }
 
       if (!this.contextLost) {
@@ -647,25 +526,47 @@ export class Engine {
     }
   };
 
-  private updateSkyAndClouds(dt: number): void {
-    this.sky.position.copy(this.camera.position);
-    for (let i = 0; i < this.clouds.length; i++) {
-      const c = this.clouds[i];
-      // only the big deck planes scroll; sprites + sun stay world-fixed
-      if ((c as THREE.Mesh).isMesh) {
-        const m = c.material as THREE.MeshBasicMaterial;
-        if (m.map) {
-          m.map.offset.x += dt * (0.0035 + i * 0.0018);
-          m.map.offset.y += dt * 0.0009;
-        }
-        c.position.x = this.camera.position.x;
-        c.position.z = this.camera.position.z;
+  /** weather + space + traffic + fog/lights, driven every frame */
+  private updateEnvironment(dt: number): void {
+    const spaceFade = this.space.fadeAt(this.pos.y);
+    const wasSpace = this.spaceMode;
+    this.spaceMode = spaceFade > 0.55;
+    if (this.spaceMode !== wasSpace) {
+      audio.play("space", 0.9);
+      if (this.mode === "playing") {
+        this.setMsg(this.spaceMode ? "مدار فضایی — به سیاره‌ها پرواز کن" : "بازگشت به زمین", 2.6, "info");
       }
     }
+    this.weather.update(dt, this.camera.position, {
+      spaceFade,
+      onLightning: (i) => {
+        audio.play("boom", 0.35 + i * 0.3);
+        this.shake = Math.max(this.shake, 3 + i * 4);
+      },
+    });
+    this.space.update(dt, this.camera.position, this.pos.y);
+
+    // sun & ambient follow the weather
+    this.sunLight.position.copy(this.weather.sunDir).multiplyScalar(900).add(this.pos);
+    this.sunLight.color.copy(this.weather.out.sunColor);
+    this.sunLight.intensity = this.weather.out.sunI * 2.6;
+    this.hemiLight.intensity = 0.5 + this.weather.out.ambI;
+    this.hemiLight.color.copy(this.weather.out.horizon);
+    const fog = this.scene.fog as THREE.FogExp2;
+    fog.color.copy(this.weather.out.fogColor);
+    fog.density = this.weather.out.fogD * (1 - spaceFade * 0.92);
+
+    this.traffic.update(dt, this.pos);
   }
 
-  /* ---------------- menu attract cam ---------------- */
-
+  private onCityRebuild(b: { x: number; z: number; h: number }): void {
+    audio.play("rebuild", 0.8);
+    this.fx.ring(b.x, 2, b.z, 0x59c8ff, b.h * 1.6, 0.8, true, 2.4);
+    for (let i = 0; i < 10; i++) {
+      this.fx.spark(b.x + (Math.random() - 0.5) * b.h * 0.7, Math.random() * b.h, b.z + (Math.random() - 0.5) * b.h * 0.7,
+        0x8fd8ff, 10, 26, 0.5, 0.3, 20, 1);
+    }
+  }
   private updateMenu(dt: number, raw: number): void {
     const r = 300;
     const a = this.t * 0.075;
@@ -723,12 +624,26 @@ export class Engine {
     } else {
       this.updateHero(dt, raw);
       this.updateWaves(dt);
+
+      // ---- automatic aging: +1 year every 30 seconds ----
+      this.ageT += raw;
+      if (this.ageT >= 30) {
+        this.ageT -= 30;
+        this.growAge(1);
+        this.hp = Math.min(this.hpMax(), this.hp + 8);
+      }
     }
+
+    // ---- battle zone leash: enemies never leave the plaza district ----
+    this.updateZoneLeash(dt);
 
     this.updateShots(dt);
     this.updateBombs(dt);
     this.updateOrbs(dt);
     this.updateThrown(dt);
+    this.updateMeteors(dt);
+    this.updateMissiles(dt);
+    this.updateBubble(dt);
 
     this.enemies.update({
       dt,
@@ -837,6 +752,10 @@ export class Engine {
     this.cd.blast = Math.max(0, this.cd.blast - dt);
     this.cd.dash = Math.max(0, this.cd.dash - dt);
     this.cd.slam = Math.max(0, this.cd.slam - dt);
+    this.cd.meteor = Math.max(0, this.cd.meteor - dt);
+    this.cd.chain = Math.max(0, this.cd.chain - dt);
+    this.cd.bubble = Math.max(0, this.cd.bubble - dt);
+    this.cd.missile = Math.max(0, this.cd.missile - dt);
     this.cd.cyclone = Math.max(0, this.cd.cyclone - dt);
     this.cd.bolt = Math.max(0, this.cd.bolt - dt);
 
@@ -852,11 +771,14 @@ export class Engine {
     this._fwd.set(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
     this._right.set(this._fwd.z, 0, -this._fwd.x);
 
-    this._v.set(0, 0, 0);
-    this._v.addScaledVector(this._right, mv.x);
-    this._v.addScaledVector(this._fwd, mv.y);
-    const flatIn = this._v.length();
-    if (flatIn > 1) this._v.divideScalar(flatIn);
+    this._in.set(0, 0, 0);
+    this._in.addScaledVector(this._right, mv.x);
+    this._in.addScaledVector(this._fwd, mv.y);
+    // right flight stick also contributes lateral strafing
+    const strafe = strafeAxis();
+    if (strafe !== 0) this._in.addScaledVector(this._right, strafe * 0.85);
+    const flatIn = this._in.length();
+    if (flatIn > 1) this._in.divideScalar(flatIn);
 
     // afterburner ramps while the stick is held forward
     if (mv.mag > 0.75) this.cruise = Math.min(1, this.cruise + dt * 0.45);
@@ -878,7 +800,7 @@ export class Engine {
 
     // aim direction (facing, used by abilities)
     if (flatIn > 0.1 || Math.abs(vert) > 0.1) {
-      this._aim.copy(this._v);
+      this._aim.copy(this._in);
       this._aim.y += vert * 0.85;
       if (this._aim.lengthSq() > 1e-4) this._aim.normalize();
     } else {
@@ -899,6 +821,10 @@ export class Engine {
     }
     if (this.cd.cyclone <= 0 && this.en >= EN_CYCLONE && this.slamPhase === "none" && this.cycloneT <= 0 && this.dashT <= 0 && !this.grabbed && take("cyclone")) this.doCyclone();
     if (this.cd.bolt <= 0 && this.slamPhase === "none" && this.cycloneT <= 0 && this.dashT <= 0 && take("bolt")) this.doBoltStrike();
+    if (this.cd.meteor <= 0 && this.en >= EN_METEOR && this.slamPhase === "none" && this.cycloneT <= 0 && this.dashT <= 0 && take("meteor")) this.doMeteor();
+    if (this.cd.chain <= 0 && this.en >= EN_CHAIN && this.slamPhase === "none" && this.cycloneT <= 0 && this.dashT <= 0 && take("chain")) this.doChainLightning();
+    if (this.cd.bubble <= 0 && this.en >= EN_BUBBLE && this.slamPhase === "none" && this.cycloneT <= 0 && this.dashT <= 0 && take("bubble")) this.doBubble();
+    if (this.cd.missile <= 0 && this.en >= EN_MISSILE && this.slamPhase === "none" && this.cycloneT <= 0 && this.dashT <= 0 && take("missile")) this.doMissiles();
     // ---- atomic vision: hold to fire a melting beam from the eyes ----
     if (holdVision() && this.en > 2 && this.slamPhase === "none" && this.cycloneT <= 0 && this.dashT <= 0) {
       this.en = Math.max(0, this.en - 23 * dt);
@@ -931,7 +857,7 @@ export class Engine {
       // ---- ground locomotion: walk / run ----
       const run = mv.mag > 0.82;
       const gSpd = (run ? 23 : 15) * this.speedMult();
-      this._v2.copy(this._v).multiplyScalar(gSpd);
+      this._v2.copy(this._in).multiplyScalar(gSpd);
       this._v2.y = 0;
       const k = 1 - Math.exp(-7.5 * dt);
       this.vel.x = lerp(this.vel.x, this._v2.x, k);
@@ -941,8 +867,9 @@ export class Engine {
       if (this.punchT > 0) this.vel.addScaledVector(this._aim, 34 * dt * 10 * this.punchT);
     } else {
       // horizontal thrust
-      this._v2.copy(this._v).multiplyScalar(maxSpd);
-      this._v2.y = vert * 46;
+      this._v2.copy(this._in).multiplyScalar(maxSpd);
+      // no vertical input → gentle auto-descend (superheroes don't freeze mid-air)
+      this._v2.y = Math.abs(vert) > 0.15 ? vert * 46 : -14;
       // approach target velocity
       const k = 1 - Math.exp(-(accel / Math.max(12, maxSpd)) * dt * 2.4);
       this.vel.x = lerp(this.vel.x, this._v2.x, k);
@@ -957,14 +884,24 @@ export class Engine {
     // ---- world bounds ----
     this.pos.x = clamp(this.pos.x, -BOUND, BOUND);
     this.pos.z = clamp(this.pos.z, -BOUND, BOUND);
-    if (this.pos.y > MAX_ALT) { this.pos.y = MAX_ALT; this.vel.y = Math.min(0, this.vel.y); }
+    if (this.pos.y > 3400) { this.pos.y = 3400; this.vel.y = Math.min(0, this.vel.y); }
+    // thin air: thrust softens in space so the planets feel far away
+    if (this.pos.y > SPACE_ALT) {
+      const k = 1 - this.space.fadeAt(this.pos.y) * 0.45;
+      this.vel.multiplyScalar(Math.pow(k, dt * 2));
+    }
 
     // ---- city collision / smash-through ----
     this.resolveCityCollision(dt);
 
     // ---- ground / walking mode ----
     {
-      const surf = this.city.surfaceY(this.pos.x, this.pos.z);
+      let surf = this.city.surfaceY(this.pos.x, this.pos.z);
+      if (this.pos.y > 900) {
+        // standing on another planet?
+        const ps = this.space.surfaceUnder(this.pos);
+        if (ps) surf = Math.max(surf, ps.y);
+      }
       const footY = surf + 1.15;
       if (this.pos.y <= footY + 0.25 && this.vel.y <= 10 && this.slamPhase === "none") {
         const fallSpd = this.vel.y;
@@ -989,9 +926,15 @@ export class Engine {
           this.fx.smoke(this.pos.x, this.pos.y - 1, this.pos.z, 6, 8, 2.4, 0xa89ca0, 1.4);
         } else {
           const spd = Math.hypot(this.vel.x, this.vel.z);
+          const prevPhase = Math.sin(this.walkT);
           this.walkT += dt * (5 + spd * 0.62);
-          if (spd > 4 && Math.random() < dt * spd * 0.14) {
-            this.fx.smoke(this.pos.x, this.pos.y - 1, this.pos.z, 1, 2.4, 1.1, 0x9a9098, 0.9);
+          // a footfall every half cycle → dust puff + sparks when sprinting
+          if (spd > 4 && Math.sin(this.walkT) < 0 && prevPhase >= 0) {
+            this.fx.smoke(this.pos.x, this.pos.y - 1, this.pos.z, 1, 2.6, 1.2, 0x9a9098, 0.9);
+            if (spd > 17) {
+              this.fx.spark(this.pos.x, this.pos.y - 1, this.pos.z, 0xd8c8a8, 3, 7, 0.22, 0.5, 5, 0.6);
+              audio.play("step", 0.25 + Math.min(0.5, spd / 60));
+            }
           }
         }
       }
@@ -1068,6 +1011,7 @@ export class Engine {
 
   private groundImpact(): void {
     const p = this.pos;
+    this.traffic.panicAt(p.x, p.z, 55);
     this.fx.ring(p.x, 0.8, p.z, 0xffd2a0, 26, 0.55, true, 1.4);
     this.fx.smoke(p.x, 1.5, p.z, 12, 12, 3, 0xa1959a, 2.6);
     this.fx.spark(p.x, 1, p.z, 0xffc978, 18, 22, 0.5, 0.5, -20, 0.4);
@@ -1284,9 +1228,10 @@ export class Engine {
         this.punchSide = 1 - this.punchSide;
 
         // magnetism: lunge toward the target so the barrage connects
+        // (only when actually out of reach — never overshoot past the target)
         this._aim.subVectors(tgt.obj.position, this.pos).normalize();
         const d = tgt.obj.position.distanceTo(this.pos);
-        this.vel.addScaledVector(this._aim, Math.min(46, d * 5.5));
+        if (d > 3.2) this.vel.addScaledVector(this._aim, Math.min(42, (d - 3.2) * 5));
 
         const reach = 3.0;
         const hitPos = this._v.copy(this.pos).addScaledVector(this._aim, reach);
@@ -1374,9 +1319,9 @@ export class Engine {
     const tgt = this.nearestEnemy(finisher ? 26 : 22, 0.05);
     if (tgt) {
       this._aim.subVectors(tgt.obj.position, this.pos).normalize();
-      // magnetism step toward distant targets
+      // magnetism step toward distant targets (never overshoot past the target)
       const d = tgt.obj.position.distanceTo(this.pos);
-      if (d > 6) this.vel.addScaledVector(this._aim, Math.min(52, (d - 6) * 7));
+      if (d > 3.5) this.vel.addScaledVector(this._aim, Math.min(40, (d - 3.5) * 5));
     }
 
     const reach = finisher ? 4.0 : 3.2;
@@ -1587,6 +1532,241 @@ export class Engine {
       }
     }
     if (!best) this.city.gouge(target, 5.5, this.fx, 36, 6);
+  }
+
+  /* ================= new v5 abilities ================= */
+
+  /** METEOR CALL: a burning rock drops from orbit onto the aim point */
+  private doMeteor(): void {
+    this.en -= EN_METEOR;
+    this.cd.meteor = this.cdOf(CD_METEOR);
+    const target = this._v.copy(this.pos).addScaledVector(this._aim, 70);
+    target.y = Math.max(0, this.city.surfaceY(target.x, target.z));
+    if (this.en < 0) this.en = 0;
+    const from = target.clone();
+    from.y += 240; from.x += 34; from.z -= 28;
+
+    const mesh = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(3.4, 1),
+      new THREE.MeshStandardMaterial({ color: 0xffa03c, emissive: 0xff5a1a, emissiveIntensity: 2.2, roughness: 0.6 }),
+    );
+    mesh.position.copy(from);
+    this.scene.add(mesh);
+    this.meteors.push({ active: true, t: 0, from, to: target.clone(), mesh });
+    this.rig.playClip("blastFire", 1.15);
+    audio.play("charge", 1);
+    this.setMsg("شهاب‌سنگ در راه است!", 1.2, "warn");
+  }
+
+  private updateMeteors(dt: number): void {
+    for (let i = this.meteors.length - 1; i >= 0; i--) {
+      const m = this.meteors[i];
+      if (!m.active) continue;
+      m.t += dt / 0.85;
+      const k = Math.min(1, m.t);
+      m.mesh.position.lerpVectors(m.from, m.to, k * k);
+      m.mesh.rotation.x += dt * 7; m.mesh.rotation.y += dt * 5;
+      // fire trail
+      this.fx.jet(m.mesh.position.x, m.mesh.position.y, m.mesh.position.z,
+        (m.to.x - m.from.x) * 0.4, 0.6, (m.to.z - m.from.z) * 0.4, 0xffa03c, 5, 16, 0.4, 0.35, 0.25);
+      this.fx.smoke(m.mesh.position.x, m.mesh.position.y, m.mesh.position.z, 2, 9, 2.2, 0x6a5a5a, 1.2);
+      if (m.t >= 1) {
+        // IMPACT
+        m.active = false;
+        this.scene.remove(m.mesh);
+        (m.mesh.material as THREE.Material).dispose();
+        m.mesh.geometry.dispose();
+        this.meteors.splice(i, 1);
+        const p = m.to;
+        this.fx.explode(p.x, p.y + 2, p.z, 1.9, 0xff8a3c);
+        this.city.blast(p, 24, 460, this.fx);
+        for (const e of this.enemies.list) {
+          if (e.dead || e.grabbed) continue;
+          const d = e.obj.position.distanceTo(p);
+          if (d < 22) { this.damageEnemy(e, (this.odT > 0 ? 320 : 210) * (1 - d / 26), true); e.v.y += 30; }
+        }
+        this.traffic.panicAt(p.x, p.z, 90);
+        this.shake = Math.max(this.shake, 15);
+        this.slowT = Math.max(this.slowT, 0.3);
+        audio.play("meteor", 1);
+        navigator.vibrate?.([60, 40, 120]);
+      }
+    }
+  }
+
+  /** CHAIN LIGHTNING: arcs between up to 5 enemies */
+  private doChainLightning(): void {
+    this.en -= EN_CHAIN;
+    this.cd.chain = this.cdOf(CD_CHAIN);
+    const od = this.odT > 0;
+
+    let prev = this._v.copy(this.pos);
+    let from = prev.clone();
+    let hit: Enemy | null = null;
+    let bd = 95;
+    for (const e of this.enemies.list) {
+      if (e.dead || e.grabbed) continue;
+      const d = e.obj.position.distanceTo(this.pos);
+      if (d < bd) { bd = d; hit = e; }
+    }
+    let hops = 0;
+    const hitSet = new Set<Enemy>();
+    while (hit && hops < 5) {
+      hitSet.add(hit);
+      const to = hit.obj.position.clone();
+      this.fx.bolt(from.x, from.y, from.z, to.x, to.y + 1, to.z, 0x9fe8ff, 0.16 + hops * 0.04);
+      this.fx.flash(to.x, to.y + 1, to.z, 0xbfefff, 6, 0.2);
+      this.damageEnemy(hit, (od ? 130 : 88) * (1 - hops * 0.12), true);
+      hit.v.y += 8;
+      from = to.clone();
+      hops++;
+      // next hop: nearest unhit enemy within 44m
+      let next: Enemy | null = null;
+      let nd = 44;
+      for (const e of this.enemies.list) {
+        if (e.dead || e.grabbed || hitSet.has(e)) continue;
+        const d = e.obj.position.distanceTo(from);
+        if (d < nd) { nd = d; next = e; }
+      }
+      hit = next;
+    }
+    if (hops === 0) {
+      // no target: bolt into the ground ahead
+      const to = this._v2.copy(this.pos).addScaledVector(this._aim, 40);
+      to.y = Math.max(0, this.city.surfaceY(to.x, to.z));
+      this.fx.bolt(this.pos.x, this.pos.y, this.pos.z, to.x, to.y + 1, to.z, 0x9fe8ff, 0.22);
+      this.city.gouge(to, 4, this.fx, 30, 4);
+    }
+    this.shake = Math.max(this.shake, 4 + hops);
+    audio.play("chain", 1);
+  }
+
+  /** FORCE BUBBLE: 5s of soak + knockback */
+  private doBubble(): void {
+    this.en -= EN_BUBBLE;
+    this.cd.bubble = this.cdOf(CD_BUBBLE);
+    this.bubbleT = 5;
+    if (!this.bubbleMesh) {
+      this.bubbleMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(5.2, 26, 18),
+        new THREE.MeshBasicMaterial({
+          color: 0x7ae0ff, transparent: true, opacity: 0.22, fog: false,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        }),
+      );
+      this.bubbleMesh.frustumCulled = false;
+      this.scene.add(this.bubbleMesh);
+    }
+    this.bubbleMesh.visible = true;
+    audio.play("bubble", 1);
+  }
+
+  private updateBubble(dt: number): void {
+    if (this.bubbleT <= 0) {
+      if (this.bubbleMesh) this.bubbleMesh.visible = false;
+      return;
+    }
+    this.bubbleT -= dt;
+    this.bubblePulse = Math.max(0, this.bubblePulse - dt * 3);
+    const k = Math.min(1, this.bubbleT / 0.6);
+    const s = 1 + this.bubblePulse * 0.18 + Math.sin(this.t * 6) * 0.03;
+    this.bubbleMesh.scale.setScalar(s * k);
+    this.bubbleMesh.position.copy(this.pos);
+    (this.bubbleMesh.material as THREE.MeshBasicMaterial).opacity = (0.18 + this.bubblePulse * 0.3) * k;
+    // push enemies away
+    for (const e of this.enemies.list) {
+      if (e.dead || e.grabbed) continue;
+      const d = e.obj.position.distanceTo(this.pos);
+      if (d < 9) {
+        this._v2.subVectors(e.obj.position, this.pos).normalize();
+        e.v.addScaledVector(this._v2, 120 * dt * (1 - d / 9));
+      }
+    }
+    if (this.bubbleT <= 0) {
+      this.bubbleMesh.visible = false;
+      this.fx.ring(this.pos.x, this.pos.y, this.pos.z, 0x7ae0ff, 12, 0.4, false, 1.8);
+    }
+  }
+
+  /** MISSILE BARRAGE: 6 homing rockets */
+  private doMissiles(): void {
+    this.en -= EN_MISSILE;
+    this.cd.missile = this.cdOf(CD_MISSILE);
+    const targets = this.enemies.list.filter((e) => !e.dead && !e.grabbed);
+    for (let i = 0; i < 6; i++) {
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.22, 0.9, 4, 8),
+        new THREE.MeshStandardMaterial({ color: 0xd8dbe4, metalness: 0.6, roughness: 0.3 }),
+      );
+      body.rotation.x = Math.PI / 2;
+      g.add(body);
+      const tip = new THREE.Mesh(
+        new THREE.ConeGeometry(0.22, 0.5, 8),
+        new THREE.MeshStandardMaterial({ color: 0xd32436, emissive: 0xd32436, emissiveIntensity: 0.8 }),
+      );
+      tip.rotation.x = Math.PI / 2;
+      tip.position.z = 0.75;
+      g.add(tip);
+      const a = (i / 6) * Math.PI * 2;
+      g.position.copy(this.pos).add(new THREE.Vector3(Math.cos(a) * 2.2, -0.4, Math.sin(a) * 2.2));
+      this.scene.add(g);
+      this.missiles.push({
+        active: true, mesh: g,
+        v: new THREE.Vector3(Math.cos(a) * 14, 9, Math.sin(a) * 14),
+        target: targets.length ? targets[i % targets.length] : null,
+        life: 5,
+      });
+    }
+    audio.play("missile", 1);
+    this.shake = Math.max(this.shake, 4);
+  }
+
+  private updateMissiles(dt: number): void {
+    for (let i = this.missiles.length - 1; i >= 0; i--) {
+      const m = this.missiles[i];
+      if (!m.active) continue;
+      m.life -= dt;
+      // retarget if the target died
+      if (!m.target || m.target.dead) {
+        m.target = this.enemies.list.find((e) => !e.dead && !e.grabbed) ?? null;
+      }
+      const speed = Math.min(85, 24 + (5 - m.life) * 46);
+      if (m.target) {
+        this._v2.subVectors(m.target.obj.position, m.mesh.position).normalize();
+        m.v.lerp(this._v2.multiplyScalar(speed), Math.min(1, dt * 4.5));
+      } else {
+        m.v.multiplyScalar(1 - dt * 0.4);
+        m.v.y += dt * 6;
+      }
+      m.mesh.position.addScaledVector(m.v, dt);
+      m.mesh.lookAt(this._v.copy(m.mesh.position).add(m.v));
+      // exhaust
+      this.fx.jet(m.mesh.position.x, m.mesh.position.y, m.mesh.position.z,
+        -m.v.x * 0.06, -m.v.y * 0.06, -m.v.z * 0.06, 0xffb46a, 2, 7, 0.22, 0.2, 0.16);
+
+      let boom = m.life <= 0;
+      if (m.target && m.mesh.position.distanceTo(m.target.obj.position) < m.target.r + 2.4) {
+        this.damageEnemy(m.target, this.odT > 0 ? 120 : 78, true);
+        m.target.v.y += 10;
+        boom = true;
+      }
+      const b = this.city.collide(m.mesh.position, 0.8, this._push);
+      if (b) { this.city.damage(b, 60, m.mesh.position, this.fx, 18); boom = true; }
+      if (m.mesh.position.y < 0.4) boom = true;
+
+      if (boom) {
+        const p = m.mesh.position;
+        this.fx.explode(p.x, p.y, p.z, 0.45);
+        audio.play("explode", 0.5);
+        this.scene.remove(m.mesh);
+        m.mesh.traverse((o) => {
+          const mesh = o as THREE.Mesh;
+          if (mesh.isMesh) { (mesh.material as THREE.Material).dispose(); mesh.geometry.dispose(); }
+        });
+        this.missiles.splice(i, 1);
+      }
+    }
   }
 
   private doCyclone(): void {
@@ -1838,7 +2018,11 @@ export class Engine {
     this.fx.jet(muzzle.x, muzzle.y, muzzle.z, this._v2.x, this._v2.y, this._v2.z,
       0xffe27a, 7, 22, 0.45, 0.3, 0.2);
     this.fx.flash(muzzle.x, muzzle.y, muzzle.z, 0xffe9a0, 2, 0.1);
-    this.vel.addScaledVector(this._v2, -3.2);
+    // recoil: airborne only, and never enough to slingshot the hero backwards
+    if (!this.grounded) {
+      const back = this.vel.dot(this._v2);
+      if (back > -13) this.vel.addScaledVector(this._v2, -2.2);
+    }
     audio.play("zap");
   }
 
@@ -2471,6 +2655,13 @@ export class Engine {
 
   private damagePlayer(dmg: number, from: THREE.Vector3): void {
     if (this.heroDead || this.iT > 0 || this.dashT > 0) return;
+    if (this.bubbleT > 0) {
+      // force bubble soaks the hit
+      this.fx.ring(this.pos.x, this.pos.y, this.pos.z, 0x7ae0ff, 9, 0.3, false, 1.6);
+      audio.play("deflect", 0.5);
+      this.bubblePulse = 1;
+      return;
+    }
     const od = this.odT > 0;
     const braced = this.blockT > 0.55;
     let final = Math.round(dmg * (od ? 0.55 : 1) * (braced ? 0.22 : 1));
@@ -2506,6 +2697,7 @@ export class Engine {
   private onDemolish(): void {
     this.score += 220;
     this.addCombo(1);
+    this.traffic.panicAt(this.pos.x, this.pos.z, 120);
   }
 
   private addCombo(n: number): void {
@@ -2519,6 +2711,70 @@ export class Engine {
     this.od = clamp(this.od + v, 0, 100);
   }
 
+  /* ---------------- live settings & customisation ---------------- */
+
+  /** swap the hero skin at runtime (rebuilds the rig in place) */
+  setSkin(id: string): void {
+    const skin = skinById(id);
+    if (skin.id === this.activeSkin) return;
+    this.activeSkin = skin.id;
+    const old = this.rig;
+    const pos = old.group.position.clone();
+    const quat = old.group.quaternion.clone();
+    this.rig = new Rig(skin.pal, 1);
+    this.rig.group.position.copy(pos);
+    this.rig.group.quaternion.copy(quat);
+    this.scene.add(this.rig.group);
+    this.scene.remove(old.group);
+    old.dispose();
+    this.hud.skin = skin.id;
+    // transformation shimmer
+    for (let i = 0; i < 22; i++) {
+      const a = Math.random() * Math.PI * 2;
+      this.fx.spark(
+        this.pos.x + Math.cos(a) * 1.4, this.pos.y + Math.random() * 2.2, this.pos.z + Math.sin(a) * 1.4,
+        0x9fe8ff, 8, 16, 0.5, 0.5, 7, 1);
+    }
+    this.fx.ring(this.pos.x, this.pos.y, this.pos.z, 0x9fe8ff, 8, 0.5, false, 2);
+    audio.play("skin", 1);
+  }
+
+  /** swap which abilities sit on the on-screen cluster */
+  setLoadout(ids: string[]): void {
+    const valid = ids.filter((id) => abilityById(id)).slice(0, 6);
+    this.loadout = valid.length ? valid : [...settings.get().loadout];
+    this.hud.loadout = this.loadout;
+    audio.play("swap", 1);
+  }
+
+  /** apply quality/audio settings live */
+  applySettings(): void {
+    const st = settings.get();
+    const qp = qualityProfile(st.quality);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, qp.pixelRatio));
+    this.onResize();
+    this.bloomOn = qp.bloom && this.fpsEma > 28;
+    this.shakeEnabled = st.shake;
+    audio.setVolumes({ master: st.master, sfx: st.sfx, music: st.music });
+  }
+
+  /** QA helper: advance the simulation without rendering (slow headless GPUs
+   *  run the raf loop at a few fps, so real-time waits are unreliable in tests). */
+  fastForward(seconds: number): void {
+    let t = Math.min(30, Math.max(0, seconds));
+    while (t > 1e-4) {
+      const dt = Math.min(1 / 30, t);
+      t -= dt;
+      if (this.mode === "playing" && !this.paused) {
+        if (this.heroDead) this.updateDeath(dt, dt);
+        else this.updatePlaying(dt, dt);
+      }
+      this.city.update(dt, this.fx);
+      this.fx.update(dt, this.camera);
+      this.updateEnvironment(dt);
+    }
+  }
+
   private setMsg(msg: string, dur: number, kind: "info" | "warn"): void {
     this.hud.msg = msg;
     this.hud.msgT = dur;
@@ -2526,6 +2782,34 @@ export class Engine {
   }
 
   /* ---------------- waves ---------------- */
+
+  /** enemies are arena-bound: outside the plaza they turn back */
+  private updateZoneLeash(dt: number): void {
+    const limit = ZONE_R + 55;
+    for (const e of this.enemies.list) {
+      if (e.dead || e.grabbed) continue;
+      const dx = e.obj.position.x - ZONE.x;
+      const dz = e.obj.position.z - ZONE.z;
+      const d = Math.hypot(dx, dz);
+      if (d > limit) {
+        // flung way outside → snap back to the leash ring
+        if (d > limit + 260) {
+          e.obj.position.x = ZONE.x + (dx / d) * limit;
+          e.obj.position.z = ZONE.z + (dz / d) * limit;
+        }
+        const k = Math.min(1, dt * 3);
+        e.obj.position.x -= (dx / d) * (d - limit) * k * 3.2;
+        e.obj.position.z -= (dz / d) * (d - limit) * k * 3.2;
+        e.v.x -= (dx / d) * 90 * k;
+        e.v.z -= (dz / d) * 90 * k;
+        if (Math.random() < dt * 2) {
+          this.fx.spark(e.obj.position.x, e.obj.position.y, e.obj.position.z, 0xff5a5a, 4, 10, 0.3, 0.4, 6, 1);
+        }
+      }
+    }
+    // hud flag for the zone indicator
+    this.hud.zoneOut = Math.hypot(this.pos.x - ZONE.x, this.pos.z - ZONE.z) > ZONE_R + 90;
+  }
 
   private updateWaves(dt: number): void {
     const alive = this.enemies.list.length;
@@ -2553,10 +2837,8 @@ export class Engine {
     const boss = n % 5 === 0;
     this.quota = boss ? 1 : Math.min(22, 4 + Math.round(n * 1.5));
     this.spawnT = boss ? 1.4 : 0.6;
-    // a wave was cleared → the hero ages and grows (boss clears are worth more)
+    // wave clears still pay score + a heal (aging itself is timer-driven)
     if (n > 1) {
-      const cleared = n - 1;
-      this.growAge(cleared % 5 === 0 ? 3 : 1);
       this.hp = Math.min(this.hpMax(), this.hp + 16);
       this.score += 180 * (n - 1);
     }
@@ -2566,7 +2848,7 @@ export class Engine {
       audio.play("warn");
       this.slowT = Math.max(this.slowT, 0.6);
     } else {
-      this.setMsg(`WAVE ${n}`, 2, "info");
+      this.setMsg(`موج ${n} — در میدان نبرد`, 2, "info");
       audio.play("wave", 0.8);
     }
   }
@@ -2588,19 +2870,18 @@ export class Engine {
   }
 
   private spawnAt(kind: EKind): void {
+    // enemies only materialise inside the arena plaza
     const a = Math.random() * Math.PI * 2;
-    const dist = kind === "boss" ? 40 : kind === "mech" ? 90 : 70 + Math.random() * 50;
+    const dist = kind === "boss" ? 36 : kind === "mech" ? 80 : Math.min(ZONE_R - 12, 45 + Math.random() * 55);
     const p = new THREE.Vector3(
-      this.pos.x + Math.cos(a) * dist,
+      ZONE.x + Math.cos(a) * dist,
       0,
-      this.pos.z + Math.sin(a) * dist,
+      ZONE.z + Math.sin(a) * dist,
     );
-    p.x = clamp(p.x, -CITY_HALF, CITY_HALF);
-    p.z = clamp(p.z, -CITY_HALF, CITY_HALF);
     const surf = this.city.surfaceY(p.x, p.z);
     p.y = Math.max(surf + 14, this.pos.y + (Math.random() - 0.3) * 30);
     if (kind === "bomber") p.y = Math.max(p.y, surf + 60);
-    p.y = clamp(p.y, 16, MAX_ALT - 30);
+    p.y = clamp(p.y, 16, 460);
 
     const hpMult = 1 + this.wave * 0.1;
     const bossIdx = Math.floor(this.wave / 5) - 1;
@@ -2680,7 +2961,7 @@ export class Engine {
     this.camera.lookAt(this.camLook);
 
     // shake
-    if (this.shake > 0.05) {
+    if (this.shake > 0.05 && this.shakeEnabled) {
       const s = this.shake;
       this.camera.position.x += (Math.random() - 0.5) * s * 0.32;
       this.camera.position.y += (Math.random() - 0.5) * s * 0.32;
@@ -2726,14 +3007,20 @@ export class Engine {
     h.maxHp = this.hpMax();
     this.ageFlashT = Math.max(0, this.ageFlashT - 0.016);
     h.ageFlash = this.ageFlashT;
-    h.cds.strike = this.cd.strike;
-    h.cds.blast = this.cd.blast;
-    h.cds.dash = this.cd.dash;
-    h.cds.slam = this.cd.slam;
-    h.cds.cyclone = this.cd.cyclone;
-    h.cds.bolt = this.cd.bolt;
+    for (const a of ABILITIES) {
+      h.cds[a.id] = this.cd[a.id] ?? 0;
+      h.cdMax[a.id] = this.cdOf(a.cd);
+    }
     h.blocking = this.blockT > 0.55;
     h.flurry = this.flurryOn;
     h.time = this.runTime;
+    h.loadout = this.loadout;
+    h.skin = this.activeSkin;
+    h.inSpace = this.spaceMode;
+    h.weatherLabel = this.weather.out.label;
+    h.ageNext = this.ageT / 30;
+    h.fps = Math.round(this.fpsEma);
+    const np = this.space.nearestPlanet(this.pos);
+    h.planet = this.pos.y > 900 && np && np.dist < np.planet.r * 4.5 ? np.planet.name : "";
   }
 }

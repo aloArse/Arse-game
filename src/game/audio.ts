@@ -7,7 +7,8 @@ type SFXName =
   | "punch" | "whiff" | "zap" | "dash" | "boom" | "hit" | "explode"
   | "pickup" | "wave" | "over" | "ui" | "roar" | "slam" | "warn"
   | "flurry" | "deflect" | "cyclone" | "wreck" | "grapple" | "charge"
-  | "bossroar" | "levelup" | "heartbeat" | "summon" | "beam" | "clang";
+  | "bossroar" | "levelup" | "heartbeat" | "summon" | "beam" | "clang"
+  | "meteor" | "chain" | "bubble" | "missile" | "swap" | "skin" | "space" | "rebuild" | "step";
 
 interface ToneOpts {
   t: number; dur: number; f0: number; f1?: number; peak: number;
@@ -102,13 +103,34 @@ class AudioEngine {
       data[i] = w * 0.7 + brown * 2.4;
     }
 
+    this.applyVolumes();
     this.startSequencer();
   }
 
   setMuted(m: boolean): void {
     this.muted = m;
-    if (this.master && this.ctx) this.master.gain.setTargetAtTime(m ? 0 : 0.85, this.ctx.currentTime, 0.05);
+    this.applyVolumes();
   }
+
+  /** volume mixer (0..1 each) — persisted by the settings store */
+  vol = { master: 0.85, sfx: 1, music: 0.55 };
+
+  setVolumes(v: { master?: number; sfx?: number; music?: number }): void {
+    if (v.master !== undefined) this.vol.master = Math.min(1, Math.max(0, v.master));
+    if (v.sfx !== undefined) this.vol.sfx = Math.min(1, Math.max(0, v.sfx));
+    if (v.music !== undefined) this.vol.music = Math.min(1, Math.max(0, v.music));
+    this.applyVolumes();
+  }
+
+  private applyVolumes(): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const m = this.muted ? 0 : this.vol.master;
+    this.master?.gain.setTargetAtTime(m, t, 0.05);
+    this.sfxBus?.gain.setTargetAtTime(0.9 * this.vol.sfx, t, 0.05);
+    this.musicBus?.gain.setTargetAtTime(0.3 * this.vol.music, t, 0.08);
+  }
+
 
   /** 0 = calm flight · 1 = combat · 2 = boss warlord */
   setIntensity(i: number): void {
@@ -245,6 +267,68 @@ class AudioEngine {
         // deflected/metallic impact — inharmonic partials
         [1870, 2463, 3141].forEach((f, i) => this.osc({ t, dur: 0.22 - i * 0.05, f0: f, f1: f * 0.98, peak: 0.12 / (i + 1), type: "sine", send: 0.5 }));
         this.nz({ t, dur: 0.05, f0: 5000, peak: 0.14, type: "highpass", q: 1 });
+        break;
+      }
+      case "meteor": {
+        // falling fireball: rising roar → massive impact
+        this.nz({ t, dur: 0.9, f0: 300, f1: 1400, peak: 0.22, type: "bandpass", q: 0.8, send: 0.4 });
+        this.osc({ t, dur: 0.9, f0: 60, f1: 210, peak: 0.14, type: "sawtooth", filter: { type: "lowpass", f0: 400 } });
+        const ti = t + 0.88;
+        this.explode(ti, 1.15, 0.55);
+        this.osc({ t: ti, dur: 0.7, f0: 52, f1: 24, peak: 0.7, type: "sine" });
+        this.nz({ t: ti, dur: 0.5, f0: 900, f1: 120, peak: 0.5, type: "lowpass" });
+        break;
+      }
+      case "chain": {
+        // crackling chain lightning — cascading zaps
+        for (let i = 0; i < 5; i++) {
+          const z = t + i * 0.07;
+          this.nz({ t: z, dur: 0.06, f0: 5200 - i * 600, f1: 2400, peak: 0.24, type: "bandpass", q: 2, send: 0.45 });
+          this.osc({ t: z, dur: 0.1, f0: 1400 + i * 320, f1: 380, peak: 0.1, type: "square", filter: { type: "lowpass", f0: 2600 } });
+        }
+        break;
+      }
+      case "bubble": {
+        // energy shield bloom — glassy chord swell
+        [523, 659, 784, 1046].forEach((f, i) => this.osc({ t: t + i * 0.02, dur: 0.85, f0: f, f1: f * 1.01, peak: 0.09, type: "sine", a: 0.12, send: 0.6 }));
+        this.nz({ t, dur: 0.4, f0: 3200, f1: 6400, peak: 0.06, type: "bandpass", q: 3 });
+        break;
+      }
+      case "missile": {
+        // launch thump + rocket sizzle
+        this.osc({ t, dur: 0.2, f0: 220, f1: 70, peak: 0.4, type: "triangle" });
+        this.nz({ t, dur: 0.55, f0: 900, f1: 2400, peak: 0.16, type: "bandpass", q: 0.9, send: 0.3 });
+        break;
+      }
+      case "swap": {
+        // loadout swap — slick two-tone blip
+        this.osc({ t, dur: 0.09, f0: 620, f1: 1240, peak: 0.16, type: "square", filter: { type: "lowpass", f0: 1800 } });
+        this.osc({ t: t + 0.07, dur: 0.12, f0: 1240, f1: 1860, peak: 0.12, type: "sine" });
+        break;
+      }
+      case "skin": {
+        // transformation shimmer — ascending arpeggio
+        [392, 494, 587, 784, 988].forEach((f, i) =>
+          this.osc({ t: t + i * 0.055, dur: 0.3, f0: f, f1: f * 2, peak: 0.1, type: "triangle", a: 0.01, send: 0.5 }));
+        break;
+      }
+      case "space": {
+        // entering orbit — deep airy pad + shimmer
+        this.osc({ t, dur: 2.2, f0: 110, f1: 165, peak: 0.16, type: "sine", a: 0.5, send: 0.7 });
+        this.osc({ t, dur: 2.2, f0: 220, f1: 330, peak: 0.08, type: "sine", a: 0.6, send: 0.7 });
+        this.nz({ t, dur: 1.6, f0: 400, f1: 6000, peak: 0.05, type: "bandpass", q: 1.4 });
+        break;
+      }
+      case "step": {
+        // footfall: short filtered thud
+        this.nz({ t, dur: 0.045, f0: 900, f1: 240, peak: 0.1 * power, type: "lowpass" });
+        this.osc({ t, dur: 0.06, f0: 120, f1: 60, peak: 0.08 * power, type: "sine" });
+        break;
+      }
+      case "rebuild": {
+        // reconstruction hum — rising synth build
+        this.osc({ t, dur: 1.1, f0: 160, f1: 640, peak: 0.13, type: "sawtooth", filter: { type: "lowpass", f0: 900, f1: 2600 }, send: 0.4 });
+        [880, 1320].forEach((f, i) => this.osc({ t: t + 0.8 + i * 0.06, dur: 0.25, f0: f, peak: 0.09, type: "sine" }));
         break;
       }
       case "explode": this.explode(t, 0.75 * power, 0.4); break;

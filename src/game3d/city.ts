@@ -3,14 +3,17 @@ import * as THREE from "three";
 import type { FX } from "./fx";
 
 export const CELL = 78;
-// 15x15 keeps the skyline dense while staying below mobile WebGL memory
-// limits. The previous 17x17 layout could allocate invisible overflow towers.
-export const GRID = 15;
+// 19x19 with district zoning — downtown core, midtown, outskirts and the
+// central battle plaza. Instanced pools sized for the bigger skyline.
+export const GRID = 19;
 export const CITY_HALF = (CELL * GRID) / 2;
 
-const MAX_SLABS = 1380;
-const MAX_PROPS = 480;
-const MAX_DEBRIS = 680;
+const MAX_SLABS = 2600;
+const MAX_PROPS = 700;
+const MAX_DEBRIS = 900;
+
+/** battle arena: open plaza at the heart of the city */
+export const ZONE_R = CELL * 1.55;
 
 const GRAV = -62;
 
@@ -51,6 +54,8 @@ export interface Building {
   top: number;           // current standing height
   alive: boolean;
   tint: THREE.Color;     // facade tint (darkens with damage)
+  rebuildT: number;      // >0 counting down to automatic reconstruction
+  rebuildAnim: number;   // >0 while the tower is rising back up
 }
 
 interface Debris {
@@ -214,6 +219,9 @@ function groundTexture(): THREE.CanvasTexture {
 
 /* ---------------- city ---------------- */
 
+/** destroyed towers are reconstructed after this many seconds */
+export const REBUILD_SECONDS = 20;
+
 export class City {
   buildings: Building[] = [];
   slabs: Slab[] = [];
@@ -232,6 +240,10 @@ export class City {
   private scratchA: Building[] = [];
   private scratchB: Building[] = [];
   private scratchC: Building[] = [];
+  /** engine hooks a listener here to play the reconstruction fanfare */
+  onRebuild?: (b: Building) => void;
+  private beams: THREE.Mesh[] = [];
+  private beamFor = new Map<number, THREE.Mesh>();
 
   constructor(private scene: THREE.Scene) {
     const facade = facadeTexture();
@@ -290,6 +302,19 @@ export class City {
     ground.receiveShadow = false;
     this.group.add(ground);
 
+    // reconstruction beams (holographic construction cranes)
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: 0x59c8ff, transparent: true, opacity: 0.24, fog: false,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    });
+    for (let i = 0; i < 14; i++) {
+      const beam = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 10, 1, true), beamMat.clone());
+      beam.visible = false;
+      beam.frustumCulled = false;
+      this.group.add(beam);
+      this.beams.push(beam);
+    }
+
     scene.add(this.group);
     this.build();
   }
@@ -306,14 +331,25 @@ export class City {
         const cx = (gx - half) * CELL;
         const cz = (gz - half) * CELL;
         const distC = Math.hypot(cx, cz) / (CITY_HALF || 1);
-        // downtown is taller
-        const tallBias = Math.max(0, 1 - distC * 1.15);
-        if (Math.random() < 0.07) continue; // occasional plaza / park
+
+        // central battle arena: open plaza ringed by the skyline
+        if (distC < (ZONE_R / CITY_HALF) * 1.12) continue;
+        // scattered parks / parking lots
+        if (Math.random() < 0.055) continue;
+
+        // districts: downtown core → midtown → outskirts → edge suburbs
+        let hMin = 16, hMax = 46;
+        if (distC < 0.34) { hMin = 88; hMax = 232; }        // downtown
+        else if (distC < 0.62) { hMin = 42; hMax = 118; }   // midtown
+        else if (distC < 0.85) { hMin = 20; hMax = 62; }    // outskirts
+
+        // landmark megatowers on the diagonal
+        const landmark = distC > 0.3 && distC < 0.52 && Math.abs(Math.abs(gx - half) - Math.abs(gz - half)) < 0.6 && (gx + gz) % 7 === 3;
 
         const w = 26 + Math.random() * 22;
         const d = 26 + Math.random() * 22;
-        const h = 26 + Math.pow(Math.random(), 1.6) * (60 + tallBias * 210);
-        const n = Math.max(3, Math.min(10, Math.round(h / 26)));
+        const h = landmark ? 268 + Math.random() * 58 : hMin + Math.pow(Math.random(), 1.5) * (hMax - hMin);
+        const n = Math.max(3, Math.min(12, Math.round(h / 26)));
         const sh = h / n;
 
         // Never create a collision-only building after the instance pool fills.
@@ -334,6 +370,7 @@ export class City {
           maxHp: 60 + h * 1.7,
           slabs: [], props: [], top: h, alive: true,
           tint,
+          rebuildT: 0, rebuildAnim: 0,
         };
 
         for (let i = 0; i < n && slabIdx < MAX_SLABS; i++) {
@@ -576,6 +613,7 @@ export class City {
       b.hp = 0;
       b.alive = false;
       this.demolished++;
+      b.rebuildT = REBUILD_SECONDS;
       this.collapseFx(b, s.p.x, s.p.y, s.p.z, fx);
     }
 
@@ -675,6 +713,7 @@ export class City {
     b.alive = false;
     b.hp = 0;
     this.demolished++;
+    b.rebuildT = REBUILD_SECONDS;
 
     for (const i of b.slabs) {
       const s = this.slabs[i];
@@ -922,6 +961,67 @@ export class City {
         }
       }
     }
+
+    // ---- automatic reconstruction: 20s after a tower falls it rises again ----
+    this.beamFor.clear();
+    for (const b of this.buildings) {
+      if (b.alive && b.rebuildAnim <= 0) continue;
+
+      if (!b.alive && b.rebuildT > 0) {
+        b.rebuildT -= dt;
+        if (b.rebuildT <= 0) {
+          // rise back up
+          b.rebuildAnim = 1.4;
+          b.alive = true;
+          b.hp = b.maxHp;
+          b.top = b.h;
+          for (const i of b.slabs) {
+            const sl = this.slabs[i];
+            sl.alive = true; sl.falling = false; sl.pending = 0; sl.sag = 0; sl.rest = 0;
+            sl.p.copy(sl.p0);
+            sl.q.identity();
+            sl.v.set(0, 0, 0); sl.av.set(0, 0, 0);
+            sl.scale = 0.02;
+          }
+          for (const i of b.props) this.props[i].alive = true;
+          this.slabDirty = true;
+          this.onRebuild?.(b);
+        }
+      } else if (b.rebuildAnim > 0) {
+        b.rebuildAnim -= dt;
+        const k = 1 - Math.max(0, b.rebuildAnim) / 1.4;
+        const n = b.slabs.length;
+        for (const i of b.slabs) {
+          const sl = this.slabs[i];
+          if (!sl.alive) continue;
+          const order = sl.idx / n;               // 0 = bottom floor
+          sl.scale = Math.min(1, Math.max(0.02, (k * 1.15 - order) * 4));
+        }
+        moved = true;
+        if (b.rebuildAnim <= 0) {
+          for (const i of b.slabs) this.slabs[i].scale = 1;
+          b.rebuildAnim = 0;
+        }
+      }
+    }
+
+    // construction beams over rebuilding sites
+    let beamIdx = 0;
+    for (const b of this.buildings) {
+      if (beamIdx >= this.beams.length) break;
+      if (b.rebuildT > 0 || b.rebuildAnim > 0) {
+        const beam = this.beams[beamIdx++];
+        beam.visible = true;
+        const pulse = 0.16 + 0.1 * Math.sin(performance.now() * 0.006 + b.id);
+        (beam.material as THREE.MeshBasicMaterial).opacity = pulse;
+        const rr = Math.max(b.w, b.d) * 0.62;
+        beam.scale.set(rr, b.h + 8, rr);
+        beam.position.set(b.x, (b.h + 8) / 2, b.z);
+        beam.rotation.y += 0.04;
+        this.beamFor.set(b.id, beam);
+      }
+    }
+    for (let i = beamIdx; i < this.beams.length; i++) this.beams[i].visible = false;
 
     if (moved || this.slabDirty) {
       this.syncSlabs();
