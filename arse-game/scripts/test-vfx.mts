@@ -1,5 +1,5 @@
 /* v6.5 VFX tripwire: skin themes + perf wiring. Run: npx esbuild scripts/test-vfx.mts --bundle --platform=node --format=cjs --outfile=/tmp/test-vfx.cjs && node /tmp/test-vfx.cjs */
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { SKIN_FX, fxById, SKINS } from "../src/game3d/character";
 import { qualityProfile } from "../src/game/settings";
 
@@ -53,5 +53,10 @@ check("fx: idle upload skip", F.includes("!p.dirty") && F.includes("p.dirty = fa
 check("fx: Trail.setColor", F.includes("setColor(hex: number)"));
 check("heroModel: eyeAnchor on head bone", H.includes("this.bones.head.add(this.eyeAnchor)"));
 check("heroModel: aura flight morph", H.includes("_auraScale.set(fly ? 0.8 : 0.95"));
+check("laser: baked GLB asset exists", existsSync("src/assets/laser.glb"));
+check("engine: hero laser bolts wired",
+  E.includes('import laserUrl from "../assets/laser.glb"') &&
+  E.includes("s.laser.visible = useLaser") && E.includes("LASER_W, LASER_W, LASER_L") &&
+  E.includes("s.col = color"));
 
 process.exit(fail ? 1 : 0);

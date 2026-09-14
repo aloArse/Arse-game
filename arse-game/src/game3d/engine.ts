@@ -17,6 +17,9 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+// eslint-disable-next-line import/no-unresolved
+import laserUrl from "../assets/laser.glb";
 
 const clamp = (v: number, a: number, b: number): number => (v < a ? a : v > b ? b : v);
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
@@ -33,6 +36,9 @@ const EN_BLAST = 4, EN_DASH = 12, EN_SLAM = 32, EN_CYCLONE = 18, EN_METEOR = 30,
 /** v6.5: hero body-centre height above the group origin (2.9m hero: feet ~0.1, head ~2.9).
  *  Aerial burst FX centre on pos+BODY_CY instead of the feet. */
 const BODY_CY = 1.7;
+/** v6.6: "Laser shot" bolt scale (native 2m long, 8.6cm wide) — hero bolts only */
+const LASER_W = 3.5;
+const LASER_L = 1.6;
 /** space begins fading in above this altitude */
 const SPACE_ALT = 1250;
 /** the battle zone: central plaza */
@@ -42,6 +48,10 @@ const BOUND = CITY_HALF + 150;
 
 interface Shot {
   mesh: THREE.Mesh;
+  /** v6.6: hero laser-bolt mesh (null until laser.glb lands, orbs until then) */
+  laser: THREE.Group | null;
+  /** last spawn colour (spark tint — the laser itself is white-hot) */
+  col: number;
   v: THREE.Vector3;
   life: number;
   dmg: number;
@@ -275,6 +285,7 @@ export class Engine {
 
     this.buildShield();
     this.buildPools();
+    void this.loadLaser();
     this.applySkinFx();
 
     {
@@ -324,6 +335,27 @@ export class Engine {
     this.rig.group.add(this.shield);
   }
 
+  /** v6.6: load the hero laser-bolt mesh (CC-BY-4.0 "Laser shot" by photon).
+   *  One clone per pooled shot; hero shots use it, foe shots keep orbs. */
+  private async loadLaser(): Promise<void> {
+    try {
+      const gltf = await new GLTFLoader().loadAsync(laserUrl);
+      const tpl = gltf.scene;
+      tpl.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        const m = mesh.material as THREE.MeshStandardMaterial | undefined;
+        if (m && "depthWrite" in m) { m.depthWrite = false; m.fog = false; }
+      });
+      for (const s of this.shots) {
+        const beam = tpl.clone(true);
+        beam.visible = false;
+        beam.traverse((o) => { o.frustumCulled = false; });
+        this.scene.add(beam);
+        s.laser = beam;
+      }
+    } catch { /* orb fallback stays */ }
+  }
+
   private buildPools(): void {
     const boltGeo = new THREE.SphereGeometry(1, 10, 8);
     for (let i = 0; i < 90; i++) {
@@ -336,7 +368,7 @@ export class Engine {
       mesh.frustumCulled = false;
       this.scene.add(mesh);
       this.shots.push({
-        mesh, v: new THREE.Vector3(), life: 0, dmg: 0,
+        mesh, laser: null, col: 0xffd23f, v: new THREE.Vector3(), life: 0, dmg: 0,
         foe: false, r: 0.4, active: false, light: 0,
       });
     }
@@ -482,7 +514,7 @@ export class Engine {
   }
 
   private deactivateAll(): void {
-    for (const s of this.shots) { s.active = false; s.mesh.visible = false; }
+    for (const s of this.shots) { s.active = false; s.mesh.visible = false; if (s.laser) s.laser.visible = false; }
     for (const b of this.bombs) { b.active = false; b.mesh.visible = false; }
     for (const o of this.orbs) { o.active = false; o.mesh.visible = false; }
   }
@@ -1883,6 +1915,8 @@ export class Engine {
     s.life = 2.2;
     s.v.multiplyScalar(-1.12);
     (s.mesh.material as THREE.MeshBasicMaterial).color.setHex(0xbfe0ff);
+    s.col = 0xbfe0ff;
+    if (s.laser) { s.laser.visible = true; s.mesh.visible = false; }
     const p = s.mesh.position;
     this.fx.spark(p.x, p.y, p.z, 0xbfe0ff, 10, 14, 0.4, 0.3, 0, 1);
     this.fx.flash(p.x, p.y, p.z, 0xd8ecff, 2, 0.1);
@@ -2298,7 +2332,10 @@ export class Engine {
     s.dmg = dmg;
     s.r = radius;
     s.life = foe ? 3.4 : 2.2;
-    s.mesh.visible = true;
+    s.col = color;
+    const useLaser = !foe && !!s.laser;
+    s.mesh.visible = !useLaser;
+    if (s.laser) s.laser.visible = useLaser;
     s.mesh.position.copy(from);
     s.mesh.scale.setScalar(radius);
     (s.mesh.material as THREE.MeshBasicMaterial).color.setHex(color);
@@ -2314,10 +2351,14 @@ export class Engine {
       // stretch along travel
       s.mesh.scale.set(s.r, s.r, s.r * (1 + Math.min(3.2, s.v.length() * 0.014)));
       s.mesh.lookAt(this._v.copy(p).add(s.v));
+      if (s.laser && s.laser.visible) {
+        s.laser.position.copy(p);
+        s.laser.lookAt(this._v.copy(p).add(s.v));
+        s.laser.scale.set(LASER_W, LASER_W, LASER_L);
+      }
 
       if (Math.random() < dt * 40) {
-        this.fx.spark(p.x, p.y, p.z,
-          (s.mesh.material as THREE.MeshBasicMaterial).color.getHex(), 1, 2, s.r * 0.8, 0.22, 0, 1);
+        this.fx.spark(p.x, p.y, p.z, s.col, 1, 2, s.r * 0.8, 0.22, 0, 1);
       }
 
       let done = s.life <= 0;
@@ -2365,6 +2406,7 @@ export class Engine {
       if (done) {
         s.active = false;
         s.mesh.visible = false;
+        if (s.laser) s.laser.visible = false;
       }
     }
   }
