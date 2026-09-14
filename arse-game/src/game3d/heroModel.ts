@@ -416,8 +416,12 @@ export class GLTFHeroRig implements HeroVisual {
   /* ---------------- HeroVisual ---------------- */
 
   setPoseImmediate(pose: Pose): void {
+    // Baked-routed poses own the body procedurally-zeroed; only true procedural
+    // poses initialize the virtual joints (else the offsets double the baked base).
+    const bakedRouted = pose === POSES.hover || pose === POSES.idle || pose === POSES.stand
+      || pose === POSES.idleFight || pose === POSES.blast || pose === POSES.hurt;
     for (const k of Object.keys(this.joints) as JointName[]) {
-      const t = pose[k];
+      const t = bakedRouted ? undefined : pose[k];
       const j = this.joints[k];
       if (t) j.rotation.set(t[0], t[1], t[2]);
       else j.rotation.set(0, 0, 0);
@@ -475,9 +479,10 @@ export class GLTFHeroRig implements HeroVisual {
       const edge = this.lastSel !== "hurt";
       this.noteSel("hurt");
       if (edge) this.fireOneShot(HIT_ROUTE, 1);
-      this.requestBase("hover", false, xf);
+      this.requestBase("neutral", false, xf);
     } else {
-      // full procedural pose (fly/fist/dash/spin/slam/grab/...): ride the hover base
+      // full procedural pose (fly/fist/dash/spin/slam/grab/...): ride the STATIC
+      // neutral base so authored eulers act directly with zero mocap drift
       for (const name of Object.keys(this.joints) as JointName[]) {
         const j = this.joints[name];
         const t = pose[name];
@@ -486,7 +491,7 @@ export class GLTFHeroRig implements HeroVisual {
         j.rotation.y += (ty - j.rotation.y) * k;
         j.rotation.z += (tz - j.rotation.z) * k;
       }
-      this.requestBase("hover", false, xf);
+      this.requestBase("neutral", false, xf);
       this.noteSel("proc");
     }
   }
