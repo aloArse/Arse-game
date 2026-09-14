@@ -54,6 +54,11 @@ check("fx: Trail.setColor", F.includes("setColor(hex: number)"));
 check("heroModel: eyeAnchor on head bone", H.includes("this.bones.head.add(this.eyeAnchor)"));
 check("heroModel: aura flight morph", H.includes("_auraScale.set(fly ? 0.8 : 0.95"));
 check("laser: baked GLB asset exists", existsSync("src/assets/laser.glb"));
+check("plasma: baked GLB asset exists", existsSync("src/assets/fireball.glb"));
+check("engine: foe plasma fireballs wired",
+  E.includes('import fireballUrl from "../assets/fireball.glb"') &&
+  E.includes("s.plasma.visible = usePlasma") && E.includes("loadPlasma()") &&
+  E.includes("_plasmaTint.copy(PLASMA_HOT)"));
 check("engine: hero laser bolts wired",
   E.includes('import laserUrl from "../assets/laser.glb"') &&
   E.includes("s.laser.visible = useLaser") && E.includes("LASER_W, LASER_W, LASER_L") &&
